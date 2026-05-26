@@ -12,12 +12,14 @@ from bs4 import BeautifulSoup
 
 
 CMF_URL = "https://www.cmfchile.cl/institucional/estadisticas/fondos_cartola_diaria.php"
+DOWNLOAD_URL = "https://www.cmfchile.cl/institucional/estadisticas/cfm_download.php"
+CAPTCHA_VALIDATE_URL = "https://www.cmfchile.cl/sitio/biblioteca/captcha2/captcha.php"
 
 # Fondo indicado:
 # 10063 - CARTERA BALANCEADO
 FUND_CODE = "10063"
 
-DAYS_BACK = 31
+DAYS_BACK = 29
 
 BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
@@ -96,6 +98,17 @@ def download_captcha(session: requests.Session, captcha_url: str) -> None:
 
     CAPTCHA_PATH.write_bytes(response.content)
     print(f"CAPTCHA guardado en: {CAPTCHA_PATH}")
+
+
+def validate_captcha(session: requests.Session, captcha: str) -> bool:
+    response = session.post(
+        CAPTCHA_VALIDATE_URL,
+        data={"accion": "valida", "valor": captcha},
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    return response.text.strip() == "1"
 
 
 def show_captcha() -> None:
@@ -342,28 +355,25 @@ def main() -> None:
         print("No ingresaste CAPTCHA. Proceso cancelado.")
         sys.exit(1)
 
-    payload = collect_payload(form)
-    payload = infer_and_fill_fields(
-        form=form,
-        payload=payload,
-        start=start_str,
-        end=end_str,
-        captcha=captcha_value,
-    )
+    if not validate_captcha(session, captcha_value):
+        print("El CAPTCHA fue rechazado por la CMF. Proceso cancelado.")
+        sys.exit(1)
 
-    action_url, method = get_form_action_and_method(form)
+    payload = {
+        "txt_inicio": start_str,
+        "txt_termino": end_str,
+        "ffmm": FUND_CODE,
+        "captcha": captcha_value,
+    }
 
     print()
-    print(f"Enviando formulario por método {method.upper()} a:")
-    print(action_url)
+    print("Enviando formulario por método POST a:")
+    print(DOWNLOAD_URL)
 
     # Útil durante el primer ajuste. Puedes dejarlo comentado después.
     print_diagnostics(form, payload)
 
-    if method == "post":
-        response = session.post(action_url, data=payload, timeout=60)
-    else:
-        response = session.get(action_url, params=payload, timeout=60)
+    response = session.post(DOWNLOAD_URL, data=payload, timeout=60)
 
     response.raise_for_status()
 
