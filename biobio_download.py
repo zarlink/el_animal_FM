@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import html as html_lib
 import json
 import re
 import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -20,12 +21,27 @@ BASE_URL = "https://www.biobiochile.cl"
 ROBOTS_URL = f"{BASE_URL}/robots.txt"
 NEWS_SITEMAP_URL = f"{BASE_URL}/news-sitemap.xml"
 LO_ULTIMO_URL = f"{BASE_URL}/lo-ultimo.shtml"
+CATEGORY_ARCHIVE_SEED_URL = f"{BASE_URL}/lista/categorias/nacional"
 
-PARSER_VERSION = "biobio_raw_v1"
+PARSER_VERSION = "biobio_raw_v3_category_archives"
 TIMEZONE = "America/Santiago"
 
 REQUEST_TIMEOUT = 30
 DEFAULT_SLEEP_SECONDS = 0.5
+DEFAULT_MAX_CATEGORY_PAGES = 30
+
+PRIMARY_RE = re.compile(r"primary:\s+([a-z0-9-]+)\s+([a-z0-9-]+)", re.I)
+
+DEFAULT_CATEGORY_ARCHIVE_URLS = [
+    f"{BASE_URL}/lista/categorias/nacional",
+    f"{BASE_URL}/lista/categorias/internacional",
+    f"{BASE_URL}/lista/categorias/economia",
+    f"{BASE_URL}/lista/categorias/deportes",
+    f"{BASE_URL}/lista/categorias/sociedad",
+    f"{BASE_URL}/lista/categorias/espectaculos-y-tv",
+    f"{BASE_URL}/lista/categorias/opinion",
+    f"{BASE_URL}/lista/categorias/bbcl-investiga",
+]
 
 
 @dataclass
@@ -84,11 +100,76 @@ def create_session() -> requests.Session:
     return session
 
 
+def decode_response_text(response: requests.Response) -> str:
+    """
+    Decodifica HTML/XML de forma estable.
+
+    El problema observado era mojibake del tipo "caÃ­da" en vez de "caída",
+    típico de bytes UTF-8 interpretados como Latin-1/Windows-1252.
+    BioBioChile publica normalmente en UTF-8, por eso preferimos UTF-8
+    y dejamos fallback solo si falla.
+    """
+    try:
+        return response.content.decode("utf-8", errors="replace")
+    except Exception:
+        response.encoding = response.apparent_encoding or response.encoding or "utf-8"
+        return response.text
+
+
+def repair_mojibake(value: str) -> str:
+    """Corrige textos ya dañados tipo 'dÃ©ficit' -> 'déficit' cuando sea posible."""
+    if not isinstance(value, str) or not value:
+        return value or ""
+
+    markers = ("Ã", "Â", "â€", "â€œ", "â€", "â€™", "ðŸ")
+
+    if not any(marker in value for marker in markers):
+        return value
+
+    candidates = [value]
+
+    for source_encoding in ("latin1", "cp1252"):
+        try:
+            candidates.append(
+                value.encode(source_encoding, errors="ignore").decode("utf-8", errors="ignore")
+            )
+        except Exception:
+            pass
+
+    def badness(text: str) -> int:
+        return sum(text.count(marker) for marker in markers) + text.count("�") * 3
+
+    return min(candidates, key=badness)
+
+
+def normalize_text(value: Any) -> str:
+    """Normaliza HTML entities, espacios y mojibake en todos los textos extraídos."""
+    if value is None:
+        return ""
+
+    text = str(value)
+    text = html_lib.unescape(text)
+    text = repair_mojibake(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def normalize_payload_texts(value: Any) -> Any:
+    """Aplica normalización recursiva antes de guardar el JSON final."""
+    if isinstance(value, dict):
+        return {k: normalize_payload_texts(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [normalize_payload_texts(v) for v in value]
+    if isinstance(value, str):
+        return normalize_text(value)
+    return value
+
+
 def fetch_text(session: requests.Session, url: str) -> tuple[str, int, str]:
     response = session.get(url, timeout=REQUEST_TIMEOUT)
     content_type = response.headers.get("Content-Type", "")
     response.raise_for_status()
-    return response.text, response.status_code, content_type
+    return decode_response_text(response), response.status_code, content_type
 
 
 def is_biobio_article_url(url: str) -> bool:
@@ -100,7 +181,6 @@ def is_biobio_article_url(url: str) -> bool:
     if not parsed.path.endswith(".shtml"):
         return False
 
-    # Evita enlaces a apps, legales u otros subdominios no noticiosos.
     if "legales.biobiochile.cl" in url:
         return False
 
@@ -123,10 +203,6 @@ def discover_from_news_sitemap(
     session: requests.Session,
     target: date,
 ) -> dict[str, DiscoveredUrl]:
-    """
-    Google News sitemap suele tener noticias recientes.
-    Si falla, no detenemos el proceso.
-    """
     discovered: dict[str, DiscoveredUrl] = {}
 
     try:
@@ -172,10 +248,6 @@ def discover_from_monthly_sitemap(
     session: requests.Session,
     target: date,
 ) -> dict[str, DiscoveredUrl]:
-    """
-    BioBio ha usado sitemaps mensuales del tipo:
-    /static/sitemap-YYYY-MM.xml
-    """
     discovered: dict[str, DiscoveredUrl] = {}
 
     sitemap_url = f"{BASE_URL}/static/sitemap-{target.year}-{target.month:02d}.xml"
@@ -213,10 +285,6 @@ def discover_from_lo_ultimo(
     session: requests.Session,
     target: date,
 ) -> dict[str, DiscoveredUrl]:
-    """
-    Respaldo. Lo Último puede venir mezclado con placeholders, menús y enlaces repetidos.
-    Solo aceptamos URLs con la fecha objetivo.
-    """
     discovered: dict[str, DiscoveredUrl] = {}
 
     try:
@@ -246,6 +314,291 @@ def discover_from_lo_ultimo(
     return discovered
 
 
+def parse_archive_primary_secondary(html: str, archive_url: str) -> tuple[str, str]:
+    text = BeautifulSoup(html, "lxml").get_text("\n", strip=True)
+    match = PRIMARY_RE.search(text)
+
+    if not match:
+        raise RuntimeError(f"No pude extraer primary/secondary desde {archive_url}")
+
+    return match.group(1), match.group(2)
+
+
+def parse_quoted_vue_attr(value: str) -> str:
+    value = clean_text(value)
+
+    if (value.startswith("'") and value.endswith("'")) or (
+        value.startswith('"') and value.endswith('"')
+    ):
+        return value[1:-1]
+
+    return value
+
+
+def parse_vue_request_parameters(value: str) -> dict[str, str]:
+    params: dict[str, str] = {}
+
+    for key, single_quoted, double_quoted, bare in re.findall(
+        r"([a-zA-Z0-9_-]+)\s*:\s*(?:'([^']*)'|\"([^\"]*)\"|([^,}\s]+))",
+        value or "",
+    ):
+        params[key] = single_quoted or double_quoted or bare
+
+    return params
+
+
+def parse_fetch_btn_config(
+    soup: BeautifulSoup,
+    primary: str,
+    secondary: str,
+) -> dict[str, Any]:
+    fetch_btn = soup.find("fetch-btn")
+
+    request_url = f"{BASE_URL}/lista/api/get-todo-sin-robin"
+    request_parameters = {"categorias": f"group-{primary}"}
+    initial_offset = 20
+    limit = 10
+
+    if not fetch_btn:
+        return {
+            "request_url": request_url,
+            "request_parameters": request_parameters,
+            "initial_offset": initial_offset,
+            "limit": limit,
+        }
+
+    request_url_raw = fetch_btn.get(":request-url") or fetch_btn.get("request-url")
+    if request_url_raw:
+        request_url = parse_quoted_vue_attr(request_url_raw)
+
+    params_raw = fetch_btn.get(":request-parameters") or fetch_btn.get("request-parameters")
+    parsed_params = parse_vue_request_parameters(params_raw or "")
+    if parsed_params:
+        request_parameters = parsed_params
+    elif secondary and secondary != primary:
+        request_parameters = {"categorias": f"{primary},{secondary}"}
+
+    initial_offset_raw = fetch_btn.get("initial-offset")
+    if initial_offset_raw:
+        try:
+            initial_offset = int(initial_offset_raw)
+        except ValueError:
+            initial_offset = 20
+
+    limit_raw = fetch_btn.get("limit") or fetch_btn.get(":limit")
+    if limit_raw:
+        try:
+            limit = int(parse_quoted_vue_attr(limit_raw))
+        except ValueError:
+            limit = 10
+
+    return {
+        "request_url": urljoin(BASE_URL, request_url),
+        "request_parameters": request_parameters,
+        "initial_offset": initial_offset,
+        "limit": limit,
+    }
+
+
+def article_date_from_api_item(item: dict[str, Any]) -> date | None:
+    candidates = [
+        str(item.get("post_date_date", "")),
+        str(item.get("raw_post_date", "")),
+        str(item.get("post_date", "")),
+        str(item.get("post_date_txt", "")),
+        str(item.get("post_URL", "")),
+    ]
+
+    for candidate in candidates:
+        candidate = clean_text(candidate)
+
+        if not candidate:
+            continue
+
+        url_match = re.search(r"/(20\d{2})/(\d{2})/(\d{2})/", candidate)
+        if url_match:
+            year, month, day = [int(x) for x in url_match.groups()]
+            return date(year, month, day)
+
+        try:
+            return date_parser.parse(candidate, fuzzy=True).date()
+        except Exception:
+            continue
+
+    return None
+
+
+def discover_from_archive_html(
+    html: str,
+    archive_url: str,
+    target: date,
+    source_name: str,
+) -> dict[str, DiscoveredUrl]:
+    discovered: dict[str, DiscoveredUrl] = {}
+    soup = soup_from_html(html)
+    position = 0
+
+    for anchor in soup.find_all("a", href=True):
+        url = normalize_url(urljoin(BASE_URL, anchor["href"]))
+
+        if not is_biobio_article_url(url):
+            continue
+
+        if not url_matches_date(url, target):
+            continue
+
+        position += 1
+        discovered[url] = DiscoveredUrl(
+            url=url,
+            discovered_from_sitemap=False,
+            discovered_from_feed=False,
+            discovery_sources=[source_name, archive_url],
+        )
+
+    return discovered
+
+
+def discover_from_category_api(
+    session: requests.Session,
+    archive_url: str,
+    config: dict[str, Any],
+    target: date,
+    max_pages: int,
+) -> dict[str, DiscoveredUrl]:
+    discovered: dict[str, DiscoveredUrl] = {}
+
+    if max_pages <= 0:
+        return discovered
+
+    request_url = str(config["request_url"])
+    request_parameters = dict(config["request_parameters"])
+    offset = int(config["initial_offset"])
+    limit = int(config["limit"])
+
+    for page_number in range(1, max_pages + 1):
+        params = {
+            "limit": limit,
+            "offset": offset,
+            **request_parameters,
+        }
+
+        try:
+            response = session.get(request_url, params=params, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            items = response.json()
+        except Exception as exc:
+            print(f"[WARN] No se pudo leer API de categoría {archive_url}: {exc}")
+            break
+
+        if not isinstance(items, list) or not items:
+            break
+
+        page_dates: list[date] = []
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            url = normalize_url(str(item.get("post_URL_https") or item.get("post_URL") or ""))
+
+            if not is_biobio_article_url(url):
+                continue
+
+            item_date = article_date_from_api_item(item)
+            if item_date:
+                page_dates.append(item_date)
+
+            if item_date == target or url_matches_date(url, target):
+                discovered[url] = DiscoveredUrl(
+                    url=url,
+                    discovered_from_sitemap=False,
+                    discovered_from_feed=False,
+                    discovery_sources=[
+                        "category-api",
+                        archive_url,
+                        f"offset={offset}",
+                    ],
+                )
+
+        offset += len(items)
+
+        if page_dates and max(page_dates) < target:
+            break
+
+    return discovered
+
+
+def discover_category_archive_urls(session: requests.Session) -> list[str]:
+    urls = list(DEFAULT_CATEGORY_ARCHIVE_URLS)
+
+    try:
+        html, _, _ = fetch_text(session, CATEGORY_ARCHIVE_SEED_URL)
+    except Exception as exc:
+        print(f"[WARN] No se pudo leer índice de categorías: {exc}")
+        return urls
+
+    soup = soup_from_html(html)
+
+    for anchor in soup.find_all("a", href=True):
+        url = normalize_url(urljoin(BASE_URL, anchor["href"]))
+        parsed = urlparse(url)
+
+        if parsed.netloc not in {"www.biobiochile.cl", "biobiochile.cl"}:
+            continue
+
+        if not parsed.path.startswith("/lista/categorias/"):
+            continue
+
+        if url not in urls:
+            urls.append(url)
+
+    return urls
+
+
+def discover_from_category_archives(
+    session: requests.Session,
+    target: date,
+    max_pages: int,
+) -> dict[str, DiscoveredUrl]:
+    all_items: dict[str, DiscoveredUrl] = {}
+    archive_urls = discover_category_archive_urls(session)
+
+    print(f"Buscando URLs en archivos de categorías ({len(archive_urls)} categorías)...")
+
+    for archive_url in archive_urls:
+        try:
+            html, _, _ = fetch_text(session, archive_url)
+            primary, secondary = parse_archive_primary_secondary(html, archive_url)
+        except Exception as exc:
+            print(f"[WARN] No se pudo inicializar categoría {archive_url}: {exc}")
+            continue
+
+        source_name = f"category-archive:{primary}/{secondary}"
+        config = parse_fetch_btn_config(soup_from_html(html), primary, secondary)
+
+        initial = discover_from_archive_html(
+            html=html,
+            archive_url=archive_url,
+            target=target,
+            source_name=source_name,
+        )
+
+        paginated = discover_from_category_api(
+            session=session,
+            archive_url=archive_url,
+            config=config,
+            target=target,
+            max_pages=max_pages,
+        )
+
+        merged = merge_discoveries(initial, paginated)
+        print(f"  {primary}/{secondary}: {len(merged)}")
+
+        all_items = merge_discoveries(all_items, merged)
+
+    return all_items
+
+
 def merge_discoveries(*groups: dict[str, DiscoveredUrl]) -> dict[str, DiscoveredUrl]:
     merged: dict[str, DiscoveredUrl] = {}
 
@@ -273,7 +626,15 @@ def merge_discoveries(*groups: dict[str, DiscoveredUrl]) -> dict[str, Discovered
 def discover_article_urls(
     session: requests.Session,
     target: date,
+    max_category_pages: int,
 ) -> dict[str, DiscoveredUrl]:
+    category_archives = discover_from_category_archives(
+        session=session,
+        target=target,
+        max_pages=max_category_pages,
+    )
+    print(f"  Encontradas en archivos de categorías: {len(category_archives)}")
+
     print("Buscando URLs en news-sitemap.xml...")
     news = discover_from_news_sitemap(session, target)
     print(f"  Encontradas en news-sitemap: {len(news)}")
@@ -286,7 +647,7 @@ def discover_article_urls(
     latest = discover_from_lo_ultimo(session, target)
     print(f"  Encontradas en Lo Último: {len(latest)}")
 
-    merged = merge_discoveries(news, monthly, latest)
+    merged = merge_discoveries(category_archives, news, monthly, latest)
 
     return dict(sorted(merged.items(), key=lambda kv: kv[0]))
 
@@ -296,15 +657,12 @@ def soup_from_html(html: str) -> BeautifulSoup:
 
 
 def get_meta(soup: BeautifulSoup, key: str) -> str:
-    """
-    Busca meta property='key' o name='key'.
-    """
     tag = soup.find("meta", attrs={"property": key})
     if not tag:
         tag = soup.find("meta", attrs={"name": key})
 
     if tag and tag.get("content"):
-        return tag["content"].strip()
+        return clean_text(tag["content"])
 
     return ""
 
@@ -357,14 +715,12 @@ def pick_article_jsonld(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def clean_text(value: str) -> str:
-    value = re.sub(r"\s+", " ", value or "").strip()
-    return value
+    return normalize_text(value)
 
 
 def remove_template_noise(value: str) -> str:
-    value = re.sub(r"\{\{.*?\}\}", "", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    return value
+    value = re.sub(r"\{\{.*?\}\}", "", value or "")
+    return normalize_text(value)
 
 
 def text_or_empty(tag) -> str:
@@ -392,13 +748,6 @@ def get_title(soup: BeautifulSoup, article_ld: dict[str, Any]) -> str:
 
 
 def parse_datetime_value(value: str) -> tuple[str, str, str, str]:
-    """
-    Retorna:
-    - published_at ISO
-    - published_date YYYY-MM-DD
-    - published_time HH:MM:SS
-    - published_at_raw
-    """
     raw = clean_text(value)
 
     if not raw:
@@ -422,7 +771,6 @@ def get_published_data(soup: BeautifulSoup, article_ld: dict[str, Any]) -> tuple
         get_meta(soup, "pubdate"),
     ]
 
-    # Respaldo buscando patrones visibles.
     visible_text = soup.get_text(" ", strip=True)
     match = re.search(
         r"(Lunes|Martes|Miércoles|Miercoles|Jueves|Viernes|Sábado|Sabado|Domingo)"
@@ -469,11 +817,6 @@ def get_article_id(soup: BeautifulSoup, url: str) -> str:
 
 
 def infer_sections_from_url(url: str) -> tuple[str, str, str]:
-    """
-    Intenta inferir main_section, subsection y region_section desde la URL.
-    Ejemplo:
-    /noticias/nacional/chile/2026/05/21/titulo.shtml
-    """
     path_parts = [p for p in urlparse(url).path.split("/") if p]
 
     main_section = ""
@@ -484,7 +827,6 @@ def infer_sections_from_url(url: str) -> tuple[str, str, str]:
         idx = path_parts.index("noticias")
         after = path_parts[idx + 1 :]
 
-        # Cortar antes del año.
         category_parts = []
         for part in after:
             if re.fullmatch(r"\d{4}", part):
@@ -591,7 +933,6 @@ def get_author_info(soup: BeautifulSoup, article_ld: dict[str, Any]) -> tuple[st
         if meta_author:
             author_name = meta_author
 
-    # Respaldo heurístico.
     possible_author_selectors = [
         "[class*='author']",
         "[class*='autor']",
@@ -615,7 +956,6 @@ def get_author_info(soup: BeautifulSoup, article_ld: dict[str, Any]) -> tuple[st
 
             break
 
-    # Cargo/rol: heurística conservadora.
     visible_text = soup.get_text("\n", strip=True)
     role_candidates = []
     for line in visible_text.splitlines():
@@ -687,12 +1027,7 @@ def is_boilerplate_paragraph(text: str) -> bool:
     return any(fragment in lower for fragment in bad_fragments)
 
 
-def extract_body(container) -> tuple[str, str, list[str], int, int, list[str], int]:
-    """
-    Retorna:
-    body_text_raw, body_text_clean, paragraphs, paragraph_count,
-    body_length_chars, internal_subheadings, quote_count.
-    """
+def extract_body(container, article_ld: dict[str, Any] | None = None) -> tuple[str, str, list[str], int, int, list[str], int]:
     container_copy = BeautifulSoup(str(container), "lxml")
     remove_unwanted_tags(container_copy)
 
@@ -713,12 +1048,21 @@ def extract_body(container) -> tuple[str, str, list[str], int, int, list[str], i
         if text not in paragraphs:
             paragraphs.append(text)
 
+    if not paragraphs and article_ld:
+        article_body = article_ld.get("articleBody") or article_ld.get("text")
+        if isinstance(article_body, str) and len(article_body.strip()) >= 25:
+            paragraphs = [
+                clean_text(line)
+                for line in re.split(r"\n+", article_body)
+                if len(clean_text(line)) >= 25 and not is_boilerplate_paragraph(clean_text(line))
+            ]
+
     if not paragraphs:
         fallback_text = remove_template_noise(container_copy.get_text("\n", strip=True))
         fallback_lines = [
             clean_text(line)
             for line in fallback_text.splitlines()
-            if len(clean_text(line)) >= 25 and not is_boilerplate_paragraph(line)
+            if len(clean_text(line)) >= 25 and not is_boilerplate_paragraph(clean_text(line))
         ]
         paragraphs = list(dict.fromkeys(fallback_lines))
 
@@ -763,10 +1107,6 @@ def get_subtitle_and_lead(soup: BeautifulSoup, article_ld: dict[str, Any], parag
 
 
 def extract_ai_summary(soup: BeautifulSoup) -> tuple[str, bool, str]:
-    """
-    Intenta encontrar resumen IA.
-    Puede no estar disponible en HTML inicial.
-    """
     possible_texts = []
 
     for tag in soup.find_all(True):
@@ -782,7 +1122,6 @@ def extract_ai_summary(soup: BeautifulSoup) -> tuple[str, bool, str]:
 
     visible_text = soup.get_text("\n", strip=True)
 
-    # Buscar bloque cercano a la declaración del resumen IA.
     marker = "Resumen generado con una herramienta de Inteligencia Artificial"
     if marker.lower() in visible_text.lower():
         lines = [clean_text(x) for x in visible_text.splitlines() if clean_text(x)]
@@ -836,7 +1175,6 @@ def get_image_data(soup: BeautifulSoup, article_ld: dict[str, Any], container) -
         if figcaption:
             image_caption = clean_text(figcaption.get_text(" ", strip=True))
 
-    # Heurística para crédito.
     visible_text = container.get_text("\n", strip=True) if container else soup.get_text("\n", strip=True)
     for line in visible_text.splitlines():
         line_clean = clean_text(line)
@@ -1017,7 +1355,7 @@ def extract_article(
         http_status = response.status_code
         content_type = response.headers.get("Content-Type", "")
         response.raise_for_status()
-        html = response.text
+        html = decode_response_text(response)
     except Exception as exc:
         return {
             "raw": {
@@ -1074,7 +1412,7 @@ def extract_article(
         body_length_chars,
         internal_subheadings,
         quote_count,
-    ) = extract_body(container)
+    ) = extract_body(container, article_ld=article_ld)
 
     body_length_words = len(body_text_clean.split())
 
@@ -1227,48 +1565,46 @@ def write_output(
         "articles": articles,
     }
 
+    payload = normalize_payload_texts(payload)
+
     output_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Descarga noticias diarias de BioBioChile y guarda datos raw + technical."
-    )
+def ask_days_back() -> int:
+    """
+    Pregunta por consola cuántos días descargar.
+    Regla: 1 = solo hoy; 14 = hoy + 13 días anteriores.
+    """
+    while True:
+        raw = input(
+            "¿Cuántos días quieres descargar hacia atrás, incluyendo hoy? "
+            "Ejemplo 14 = hoy + 13 días anteriores: "
+        ).strip()
+        try:
+            value = int(raw)
+            if value >= 1:
+                return value
+        except ValueError:
+            pass
+        print("Ingresa un número entero mayor o igual a 1.")
 
-    parser.add_argument(
-        "--date",
-        default=None,
-        help="Fecha objetivo. Formatos aceptados: DD_MM_YYYY, DD-MM-YYYY o YYYY-MM-DD. Si se omite, usa hoy en Chile.",
-    )
 
-    parser.add_argument(
-        "--base-dir",
-        default=".",
-        help="Directorio base del proyecto. Por defecto, carpeta actual.",
-    )
+def build_date_range(end_date: date, days_count: int) -> list[date]:
+    """Devuelve fechas desde end_date hacia atrás. 14 => 14 fechas totales."""
+    return [end_date - timedelta(days=i) for i in range(days_count)]
 
-    parser.add_argument(
-        "--max-articles",
-        type=int,
-        default=0,
-        help="Límite de noticias para prueba. 0 = sin límite.",
-    )
 
-    parser.add_argument(
-        "--sleep",
-        type=float,
-        default=DEFAULT_SLEEP_SECONDS,
-        help="Pausa en segundos entre descargas.",
-    )
-
-    args = parser.parse_args()
-
-    target = parse_target_date(args.date)
-
-    base_dir = Path(args.base_dir).resolve()
+def scrape_single_day(
+    session: requests.Session,
+    target: date,
+    base_dir: Path,
+    max_articles: int = 0,
+    sleep_seconds: float = DEFAULT_SLEEP_SECONDS,
+    max_category_pages: int = DEFAULT_MAX_CATEGORY_PAGES,
+) -> dict[str, Any]:
     day_dir = base_dir / "biobio" / date_dir_name(target)
     raw_html_dir = day_dir / "html"
     output_path = day_dir / "noticias_dia.txt"
@@ -1276,23 +1612,25 @@ def main() -> None:
     day_dir.mkdir(parents=True, exist_ok=True)
     raw_html_dir.mkdir(parents=True, exist_ok=True)
 
-    session = create_session()
-
-    print("=== Scraper diario BioBioChile ===")
-    print(f"Fecha objetivo: {target.isoformat()}")
+    print("\n" + "=" * 70)
+    print(f"Scraping BioBioChile para fecha: {target.isoformat()}")
     print(f"Carpeta destino: {day_dir}")
     print(f"Archivo salida: {output_path}")
-    print()
+    print("=" * 70)
 
-    discoveries = discover_article_urls(session, target)
+    discoveries = discover_article_urls(
+        session=session,
+        target=target,
+        max_category_pages=max_category_pages,
+    )
     urls = list(discoveries.keys())
 
-    if args.max_articles and args.max_articles > 0:
-        urls = urls[: args.max_articles]
+    if max_articles and max_articles > 0:
+        urls = urls[:max_articles]
 
     print()
     print(f"Total de noticias detectadas para el día: {len(discoveries)}")
-    if args.max_articles and args.max_articles > 0:
+    if max_articles and max_articles > 0:
         print(f"Modo prueba: se descargarán solo {len(urls)} noticias.")
     else:
         print(f"Se descargarán {len(urls)} noticias.")
@@ -1311,8 +1649,8 @@ def main() -> None:
 
         articles.append(article)
 
-        if args.sleep > 0:
-            time.sleep(args.sleep)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
 
     write_output(
         output_path=output_path,
@@ -1325,12 +1663,131 @@ def main() -> None:
     failed = len(articles) - successful
 
     print()
-    print("=== Proceso terminado ===")
-    print(f"Noticias detectadas: {len(discoveries)}")
-    print(f"Noticias descargadas: {len(articles)}")
-    print(f"Parseadas sin observaciones: {successful}")
-    print(f"Con observaciones o errores: {failed}")
-    print(f"Archivo guardado en: {output_path}")
+    print("Resumen del día:")
+    print(f"  Noticias detectadas: {len(discoveries)}")
+    print(f"  Noticias descargadas: {len(articles)}")
+    print(f"  Parseadas sin observaciones: {successful}")
+    print(f"  Con observaciones o errores: {failed}")
+    print(f"  Archivo guardado en: {output_path}")
+
+    return {
+        "target_date": target.isoformat(),
+        "articles_found": len(discoveries),
+        "articles_downloaded": len(articles),
+        "parse_success": successful,
+        "parse_failed": failed,
+        "output_path": str(output_path),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Descarga noticias de BioBioChile desde hoy hacia atrás y guarda datos raw + technical."
+    )
+
+    parser.add_argument(
+        "--date",
+        default=None,
+        help=(
+            "Fecha final del rango. Formatos aceptados: DD_MM_YYYY, DD-MM-YYYY o YYYY-MM-DD. "
+            "Si se omite, usa hoy en Chile."
+        ),
+    )
+
+    parser.add_argument(
+        "--days-back",
+        type=int,
+        default=None,
+        help=(
+            "Cantidad de días totales a descargar hacia atrás, incluyendo la fecha final. "
+            "Ejemplo: 14 = fecha final + 13 días anteriores. Si se omite, se pregunta por consola."
+        ),
+    )
+
+    parser.add_argument(
+        "--base-dir",
+        default=".",
+        help="Directorio base del proyecto. Por defecto, carpeta actual.",
+    )
+
+    parser.add_argument(
+        "--max-articles",
+        type=int,
+        default=0,
+        help="Límite de noticias por día para prueba. 0 = sin límite.",
+    )
+
+    parser.add_argument(
+        "--sleep",
+        type=float,
+        default=DEFAULT_SLEEP_SECONDS,
+        help="Pausa en segundos entre descargas.",
+    )
+
+    parser.add_argument(
+        "--max-category-pages",
+        type=int,
+        default=DEFAULT_MAX_CATEGORY_PAGES,
+        help=(
+            "Número máximo de páginas API a revisar por categoría. "
+            "Sube este valor si necesitas más de 30 días o categorías con mucho volumen."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    end_date = parse_target_date(args.date)
+    days_count = args.days_back if args.days_back is not None else ask_days_back()
+
+    if days_count < 1:
+        raise ValueError("--days-back debe ser mayor o igual a 1.")
+
+    targets = build_date_range(end_date, days_count)
+    base_dir = Path(args.base_dir).resolve()
+    session = create_session()
+
+    print("=== Scraper BioBioChile por rango de días ===")
+    print(f"Fecha final: {end_date.isoformat()}")
+    print(f"Días totales a descargar: {days_count}")
+    print(f"Primera fecha a procesar: {targets[0].isoformat()}")
+    print(f"Última fecha a procesar: {targets[-1].isoformat()}")
+    print(f"Directorio base: {base_dir}")
+
+    global_summary: list[dict[str, Any]] = []
+
+    for target in targets:
+        try:
+            summary = scrape_single_day(
+                session=session,
+                target=target,
+                base_dir=base_dir,
+                max_articles=args.max_articles,
+                sleep_seconds=args.sleep,
+                max_category_pages=args.max_category_pages,
+            )
+            global_summary.append(summary)
+        except Exception as exc:
+            print(f"[ERROR] Falló la descarga del día {target.isoformat()}: {exc}")
+            global_summary.append(
+                {
+                    "target_date": target.isoformat(),
+                    "error": str(exc),
+                }
+            )
+
+    summary_dir = base_dir / "biobio"
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = summary_dir / f"resumen_descarga_{date_dir_name(end_date)}_{days_count}_dias.txt"
+    summary_path.write_text(
+        json.dumps(normalize_payload_texts(global_summary), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    print("\n" + "=" * 70)
+    print("PROCESO GENERAL TERMINADO")
+    print(f"Días procesados: {len(global_summary)}")
+    print(f"Resumen general guardado en: {summary_path}")
+    print("=" * 70)
 
 
 if __name__ == "__main__":

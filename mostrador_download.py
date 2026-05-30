@@ -5,7 +5,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
@@ -19,13 +19,35 @@ from zoneinfo import ZoneInfo
 BASE_URL = "https://www.elmostrador.cl"
 DIA_URL = f"{BASE_URL}/dia/"
 CATEGORIA_DIA_URL = f"{BASE_URL}/categoria/dia/"
+SITEMAP_URL = f"{BASE_URL}/sitemap.xml"
+NEWS_SITEMAP_URL = f"{BASE_URL}/sitemap_news.xml"
 
-PARSER_VERSION = "elmostrador_raw_v1"
+PARSER_VERSION = "elmostrador_raw_v2_range_sections"
 TIMEZONE = "America/Santiago"
 
 REQUEST_TIMEOUT = 30
 DEFAULT_SLEEP_SECONDS = 0.5
-DEFAULT_MAX_CATEGORY_PAGES = 3
+DEFAULT_MAX_CATEGORY_PAGES = 350
+
+DEFAULT_SECTION_ARCHIVE_URLS = [
+    f"{BASE_URL}/",
+    f"{BASE_URL}/noticias/pais/",
+    f"{BASE_URL}/noticias/mundo/",
+    f"{BASE_URL}/noticias/sin-editar/",
+    f"{BASE_URL}/mercados/",
+    f"{BASE_URL}/mercados/actualidad-economica/",
+    f"{BASE_URL}/noticias/opinion/",
+    f"{BASE_URL}/categoria/columnas/",
+    f"{BASE_URL}/categoria/cartas/",
+    f"{BASE_URL}/categoria/editorial/",
+    f"{BASE_URL}/categoria/tv/",
+    f"{BASE_URL}/noticias/multimedia/",
+    f"{BASE_URL}/cultura/",
+    f"{BASE_URL}/agenda-pais/",
+    f"{BASE_URL}/categoria/agenda/",
+    f"{BASE_URL}/braga/",
+    f"{BASE_URL}/noticias/deportes/",
+]
 
 
 SPANISH_MONTHS = {
@@ -189,6 +211,27 @@ def url_matches_date(url: str, target: date) -> bool:
     return target.strftime("/%Y/%m/%d/") in url
 
 
+def date_from_article_url(url: str) -> date | None:
+    match = re.search(r"/(20\d{2})/(\d{2})/(\d{2})/", url)
+    if not match:
+        return None
+
+    year, month, day = [int(x) for x in match.groups()]
+    return date(year, month, day)
+
+
+def page_url_for_number(base_url: str, page_number: int) -> str:
+    if page_number <= 1:
+        return base_url
+
+    parsed = urlparse(base_url)
+    path = parsed.path.rstrip("/")
+    path = re.sub(r"/page/\d+$", "", path)
+
+    cleaned = parsed._replace(path=f"{path}/page/{page_number}/", query="")
+    return urlunparse(cleaned)
+
+
 def merge_discoveries(*groups: dict[str, DiscoveredUrl]) -> dict[str, DiscoveredUrl]:
     merged: dict[str, DiscoveredUrl] = {}
 
@@ -346,6 +389,67 @@ def discover_from_page(
     return discovered
 
 
+def discover_dates_from_page(
+    session: requests.Session,
+    page_url: str,
+    allowed_dates: set[date],
+    source_name: str,
+    page_number: int | None = None,
+) -> tuple[dict[date, dict[str, DiscoveredUrl]], list[date]]:
+    discovered_by_date: dict[date, dict[str, DiscoveredUrl]] = {
+        target: {} for target in allowed_dates
+    }
+    page_dates: list[date] = []
+
+    try:
+        html, _, _ = fetch_text(session, page_url)
+    except Exception as exc:
+        print(f"[WARN] No se pudo leer {page_url}: {exc}")
+        return discovered_by_date, page_dates
+
+    soup = soup_from_html(html)
+    positions_by_date: dict[date, int] = {}
+
+    for anchor in soup.find_all("a", href=True):
+        url = normalize_url(urljoin(BASE_URL, anchor["href"]))
+
+        if not is_elmostrador_article_url(url):
+            continue
+
+        article_date = date_from_article_url(url)
+        if not article_date:
+            continue
+
+        page_dates.append(article_date)
+
+        if article_date not in allowed_dates:
+            continue
+
+        positions_by_date[article_date] = positions_by_date.get(article_date, 0) + 1
+
+        title = remove_template_noise(text_or_empty(anchor))
+        category = infer_listing_category(anchor)
+        excerpt = infer_listing_excerpt(anchor)
+
+        discovered_by_date[article_date][url] = DiscoveredUrl(
+            url=url,
+            discovered_from_sitemap=False,
+            discovered_from_feed=source_name in {"feed"},
+            discovered_from_dia_page=source_name == "dia",
+            discovered_from_categoria_dia=source_name == "categoria-dia",
+            discovered_from_home=source_name == "home",
+            discovered_from_section=source_name,
+            listing_position=positions_by_date[article_date],
+            listing_page_number=page_number,
+            listing_title=title,
+            listing_excerpt=excerpt,
+            listing_category=category,
+            discovery_sources=[source_name, page_url],
+        )
+
+    return discovered_by_date, page_dates
+
+
 def discover_from_categoria_dia_paginated(
     session: requests.Session,
     target: date,
@@ -380,6 +484,119 @@ def discover_from_categoria_dia_paginated(
     return all_items
 
 
+def discover_from_categoria_dia_range(
+    session: requests.Session,
+    targets: list[date],
+    max_pages: int,
+) -> dict[date, dict[str, DiscoveredUrl]]:
+    allowed_dates = set(targets)
+    all_items: dict[date, dict[str, DiscoveredUrl]] = {target: {} for target in targets}
+
+    if not targets:
+        return all_items
+
+    oldest_target = min(targets)
+
+    for page_number in range(1, max_pages + 1):
+        page_url = page_url_for_number(CATEGORIA_DIA_URL, page_number)
+        print(f"Buscando en categoria/dia página {page_number}: {page_url}")
+
+        discovered_by_date, page_dates = discover_dates_from_page(
+            session=session,
+            page_url=page_url,
+            allowed_dates=allowed_dates,
+            source_name="categoria-dia",
+            page_number=page_number,
+        )
+
+        page_total = sum(len(items) for items in discovered_by_date.values())
+        print(f"  Encontradas para rango: {page_total}")
+
+        for target, items in discovered_by_date.items():
+            all_items[target] = merge_discoveries(all_items[target], items)
+
+        if page_number > 1 and page_total == 0 and page_dates and max(page_dates) < oldest_target:
+            break
+
+    return all_items
+
+
+def discover_section_archive_urls(session: requests.Session) -> list[str]:
+    urls = list(DEFAULT_SECTION_ARCHIVE_URLS)
+
+    for seed_url in [BASE_URL, DIA_URL, CATEGORIA_DIA_URL]:
+        try:
+            html, _, _ = fetch_text(session, seed_url)
+        except Exception as exc:
+            print(f"[WARN] No se pudo descubrir secciones desde {seed_url}: {exc}")
+            continue
+
+        soup = soup_from_html(html)
+
+        for anchor in soup.find_all("a", href=True):
+            url = normalize_url(urljoin(BASE_URL, anchor["href"]))
+            parsed = urlparse(url)
+
+            if parsed.netloc not in {"www.elmostrador.cl", "elmostrador.cl"}:
+                continue
+
+            path = parsed.path
+
+            if re.search(r"/20\d{2}/\d{2}/\d{2}/", path):
+                continue
+
+            if path.rstrip("/") == "/categoria/dia":
+                continue
+
+            if re.search(r"/page/\d+/?$", path):
+                continue
+
+            if "/autor/" in path or "/claves/" in path or "/tag/" in path:
+                continue
+
+            if any(
+                path.startswith(prefix)
+                for prefix in [
+                    "/noticias/",
+                    "/categoria/",
+                    "/mercados/",
+                    "/cultura/",
+                    "/agenda-pais/",
+                    "/braga/",
+                ]
+            ):
+                if url not in urls:
+                    urls.append(url)
+
+    return urls
+
+
+def discover_from_section_archives(
+    session: requests.Session,
+    target: date,
+) -> dict[str, DiscoveredUrl]:
+    all_items: dict[str, DiscoveredUrl] = {}
+    section_urls = discover_section_archive_urls(session)
+
+    print(f"Buscando URLs en secciones/categorías ({len(section_urls)} secciones)...")
+
+    for section_url in section_urls:
+        discovered = discover_from_page(
+            session=session,
+            page_url=section_url,
+            target=target,
+            source_name=f"section:{urlparse(section_url).path.strip('/') or 'home'}",
+            page_number=1,
+        )
+
+        if discovered:
+            print(f"  {section_url}: {len(discovered)}")
+
+        all_items = merge_discoveries(all_items, discovered)
+
+    return all_items
+
+
 def discover_from_candidate_sitemaps(
     session: requests.Session,
     target: date,
@@ -391,9 +608,10 @@ def discover_from_candidate_sitemaps(
     discovered: dict[str, DiscoveredUrl] = {}
 
     candidates = [
+        NEWS_SITEMAP_URL,
+        SITEMAP_URL,
         f"{BASE_URL}/sitemap_index.xml",
         f"{BASE_URL}/post-sitemap.xml",
-        f"{BASE_URL}/sitemap.xml",
     ]
 
     sitemap_urls: list[str] = []
@@ -449,6 +667,7 @@ def discover_article_urls(
     session: requests.Session,
     target: date,
     max_category_pages: int,
+    preloaded_categoria: dict[str, DiscoveredUrl] | None = None,
 ) -> dict[str, DiscoveredUrl]:
     print("Buscando URLs en /dia/...")
     dia = discover_from_page(
@@ -460,18 +679,28 @@ def discover_article_urls(
     )
     print(f"  Encontradas en /dia/: {len(dia)}")
 
-    print("Buscando URLs en /categoria/dia/...")
-    categoria = discover_from_categoria_dia_paginated(
+    sections = discover_from_section_archives(
         session=session,
         target=target,
-        max_pages=max_category_pages,
     )
+    print(f"  Encontradas en secciones/categorías: {len(sections)}")
+
+    if preloaded_categoria is None:
+        print("Buscando URLs en /categoria/dia/...")
+        categoria = discover_from_categoria_dia_paginated(
+            session=session,
+            target=target,
+            max_pages=max_category_pages,
+        )
+    else:
+        categoria = preloaded_categoria
+        print(f"Usando URLs precargadas desde /categoria/dia/: {len(categoria)}")
 
     print("Buscando URLs en sitemaps candidatos como respaldo...")
     sitemaps = discover_from_candidate_sitemaps(session, target)
     print(f"  Encontradas en sitemaps: {len(sitemaps)}")
 
-    merged = merge_discoveries(dia, categoria, sitemaps)
+    merged = merge_discoveries(dia, sections, categoria, sitemaps)
     return dict(sorted(merged.items(), key=lambda kv: kv[0]))
 
 
@@ -1726,49 +1955,36 @@ def write_output(
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Descarga noticias diarias de El Mostrador y guarda datos raw + technical."
-    )
+def ask_days_back() -> int:
+    while True:
+        raw = input(
+            "¿Cuántos días quieres descargar hacia atrás, incluyendo la fecha final? "
+            "Ejemplo 30 = fecha final + 29 días anteriores: "
+        ).strip()
 
-    parser.add_argument(
-        "--date",
-        default=None,
-        help="Fecha objetivo. Formatos aceptados: DD_MM_YYYY, DD-MM-YYYY o YYYY-MM-DD. Si se omite, usa hoy en Chile.",
-    )
+        try:
+            value = int(raw)
+            if value >= 1:
+                return value
+        except ValueError:
+            pass
 
-    parser.add_argument(
-        "--base-dir",
-        default=".",
-        help="Directorio base del proyecto. Por defecto, carpeta actual.",
-    )
+        print("Ingresa un número entero mayor o igual a 1.")
 
-    parser.add_argument(
-        "--max-articles",
-        type=int,
-        default=0,
-        help="Límite de noticias para prueba. 0 = sin límite.",
-    )
 
-    parser.add_argument(
-        "--sleep",
-        type=float,
-        default=DEFAULT_SLEEP_SECONDS,
-        help="Pausa en segundos entre descargas.",
-    )
+def build_date_range(end_date: date, days_count: int) -> list[date]:
+    return [end_date - timedelta(days=i) for i in range(days_count)]
 
-    parser.add_argument(
-        "--max-category-pages",
-        type=int,
-        default=DEFAULT_MAX_CATEGORY_PAGES,
-        help="Número máximo de páginas a revisar en /categoria/dia/page/N/.",
-    )
 
-    args = parser.parse_args()
-
-    target = parse_target_date(args.date)
-
-    base_dir = Path(args.base_dir).resolve()
+def scrape_single_day(
+    session: requests.Session,
+    target: date,
+    base_dir: Path,
+    max_articles: int = 0,
+    sleep_seconds: float = DEFAULT_SLEEP_SECONDS,
+    max_category_pages: int = DEFAULT_MAX_CATEGORY_PAGES,
+    preloaded_categoria: dict[str, DiscoveredUrl] | None = None,
+) -> dict[str, Any]:
     day_dir = base_dir / "mostrador" / date_dir_name(target)
     raw_html_dir = day_dir / "html"
     output_path = day_dir / "noticias_dia.txt"
@@ -1776,29 +1992,28 @@ def main() -> None:
     day_dir.mkdir(parents=True, exist_ok=True)
     raw_html_dir.mkdir(parents=True, exist_ok=True)
 
-    session = create_session()
-
-    print("=== Scraper diario El Mostrador ===")
-    print(f"Fecha objetivo: {target.isoformat()}")
+    print("\n" + "=" * 70)
+    print(f"Scraping El Mostrador para fecha: {target.isoformat()}")
     print(f"Carpeta destino: {day_dir}")
     print(f"Archivo salida: {output_path}")
-    print()
+    print("=" * 70)
 
     discoveries = discover_article_urls(
         session=session,
         target=target,
-        max_category_pages=args.max_category_pages,
+        max_category_pages=max_category_pages,
+        preloaded_categoria=preloaded_categoria,
     )
 
     urls = list(discoveries.keys())
 
-    if args.max_articles and args.max_articles > 0:
-        urls = urls[: args.max_articles]
+    if max_articles and max_articles > 0:
+        urls = urls[:max_articles]
 
     print()
     print(f"Total de noticias detectadas para el día: {len(discoveries)}")
 
-    if args.max_articles and args.max_articles > 0:
+    if max_articles and max_articles > 0:
         print(f"Modo prueba: se descargarán solo {len(urls)} noticias.")
     else:
         print(f"Se descargarán {len(urls)} noticias.")
@@ -1818,8 +2033,8 @@ def main() -> None:
 
         articles.append(article)
 
-        if args.sleep > 0:
-            time.sleep(args.sleep)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
 
     write_output(
         output_path=output_path,
@@ -1832,12 +2047,149 @@ def main() -> None:
     failed = len(articles) - successful
 
     print()
-    print("=== Proceso terminado ===")
-    print(f"Noticias detectadas: {len(discoveries)}")
-    print(f"Noticias descargadas: {len(articles)}")
-    print(f"Parseadas sin observaciones: {successful}")
-    print(f"Con observaciones o errores: {failed}")
-    print(f"Archivo guardado en: {output_path}")
+    print("Resumen del día:")
+    print(f"  Noticias detectadas: {len(discoveries)}")
+    print(f"  Noticias descargadas: {len(articles)}")
+    print(f"  Parseadas sin observaciones: {successful}")
+    print(f"  Con observaciones o errores: {failed}")
+    print(f"  Archivo guardado en: {output_path}")
+
+    return {
+        "target_date": target.isoformat(),
+        "articles_found": len(discoveries),
+        "articles_downloaded": len(articles),
+        "parse_success": successful,
+        "parse_failed": failed,
+        "output_path": str(output_path),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Descarga noticias de El Mostrador desde una fecha hacia atrás y guarda datos raw + technical."
+    )
+
+    parser.add_argument(
+        "--date",
+        default=None,
+        help=(
+            "Fecha final del rango. Formatos aceptados: DD_MM_YYYY, DD-MM-YYYY o YYYY-MM-DD. "
+            "Si se omite, usa hoy en Chile."
+        ),
+    )
+
+    parser.add_argument(
+        "--days-back",
+        type=int,
+        default=None,
+        help=(
+            "Cantidad de días totales a descargar hacia atrás, incluyendo la fecha final. "
+            "Ejemplo: 30 = fecha final + 29 días anteriores. Si se omite, se pregunta por consola."
+        ),
+    )
+
+    parser.add_argument(
+        "--base-dir",
+        default=".",
+        help="Directorio base del proyecto. Por defecto, carpeta actual.",
+    )
+
+    parser.add_argument(
+        "--max-articles",
+        type=int,
+        default=0,
+        help="Límite de noticias por día para prueba. 0 = sin límite.",
+    )
+
+    parser.add_argument(
+        "--sleep",
+        type=float,
+        default=DEFAULT_SLEEP_SECONDS,
+        help="Pausa en segundos entre descargas.",
+    )
+
+    parser.add_argument(
+        "--max-category-pages",
+        type=int,
+        default=DEFAULT_MAX_CATEGORY_PAGES,
+        help=(
+            "Número máximo de páginas a revisar en /categoria/dia/page/N/. "
+            "Para 30 días puede requerir subir este valor si el sitio publicó mucho."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    end_date = parse_target_date(args.date)
+    days_count = args.days_back if args.days_back is not None else ask_days_back()
+
+    if days_count < 1:
+        raise ValueError("--days-back debe ser mayor o igual a 1.")
+
+    targets = build_date_range(end_date, days_count)
+    base_dir = Path(args.base_dir).resolve()
+    session = create_session()
+
+    print("=== Scraper El Mostrador por rango de días ===")
+    print(f"Fecha final: {end_date.isoformat()}")
+    print(f"Días totales a descargar: {days_count}")
+    print(f"Primera fecha a procesar: {targets[0].isoformat()}")
+    print(f"Última fecha a procesar: {targets[-1].isoformat()}")
+    print(f"Directorio base: {base_dir}")
+
+    preloaded_categoria_by_date: dict[date, dict[str, DiscoveredUrl]] | None = None
+
+    if len(targets) > 1:
+        print()
+        print("Precargando /categoria/dia/ para todo el rango...")
+        preloaded_categoria_by_date = discover_from_categoria_dia_range(
+            session=session,
+            targets=targets,
+            max_pages=args.max_category_pages,
+        )
+
+    global_summary: list[dict[str, Any]] = []
+
+    for target in targets:
+        try:
+            preloaded_categoria = (
+                preloaded_categoria_by_date.get(target, {})
+                if preloaded_categoria_by_date is not None
+                else None
+            )
+
+            summary = scrape_single_day(
+                session=session,
+                target=target,
+                base_dir=base_dir,
+                max_articles=args.max_articles,
+                sleep_seconds=args.sleep,
+                max_category_pages=args.max_category_pages,
+                preloaded_categoria=preloaded_categoria,
+            )
+            global_summary.append(summary)
+        except Exception as exc:
+            print(f"[ERROR] Falló la descarga del día {target.isoformat()}: {exc}")
+            global_summary.append(
+                {
+                    "target_date": target.isoformat(),
+                    "error": str(exc),
+                }
+            )
+
+    summary_dir = base_dir / "mostrador"
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = summary_dir / f"resumen_descarga_{date_dir_name(end_date)}_{days_count}_dias.txt"
+    summary_path.write_text(
+        json.dumps(global_summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    print("\n" + "=" * 70)
+    print("PROCESO GENERAL TERMINADO")
+    print(f"Días procesados: {len(global_summary)}")
+    print(f"Resumen general guardado en: {summary_path}")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
