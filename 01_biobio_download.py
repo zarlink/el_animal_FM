@@ -5,6 +5,7 @@ import html as html_lib
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -204,10 +205,29 @@ def is_biobio_article_url(url: str) -> bool:
     if parsed.netloc not in {"www.biobiochile.cl", "biobiochile.cl"}:
         return False
 
-    if not parsed.path.endswith(".shtml"):
+    path = parsed.path.lower()
+
+    if not path.endswith(".shtml"):
+        return False
+
+    excluded_paths = [
+        "/biobiotv/",
+        "/podcasts/",
+        "/programas/",
+        "/especial/",
+        "/especiales/",
+        "/legales/",
+    ]
+
+    if any(excluded in path for excluded in excluded_paths):
         return False
 
     if "legales.biobiochile.cl" in url:
+        return False
+
+    # Opcional, pero recomendable:
+    # privilegia noticias escritas reales.
+    if "/noticias/" not in path:
         return False
 
     return True
@@ -1642,6 +1662,7 @@ def scrape_single_day(
     max_articles: int = 0,
     sleep_seconds: float = DEFAULT_SLEEP_SECONDS,
     max_category_pages: int = DEFAULT_MAX_CATEGORY_PAGES,
+    article_workers: int = 8
 ) -> dict[str, Any]:
     day_dir = base_dir / "biobio" / date_dir_name(target)
     raw_html_dir = day_dir / "html"
@@ -1674,21 +1695,79 @@ def scrape_single_day(
         print(f"Se descargarán {len(urls)} noticias.")
     print()
 
-    articles: list[dict[str, Any]] = []
+    articles: list[dict[str, Any] | None] = [None] * len(urls)
 
-    for index, url in enumerate(urls, start=1):
-        print(f"[{index}/{len(urls)}] Descargando: {url}")
+    def worker(index: int, url: str) -> tuple[int, dict[str, Any]]:
+        local_session = create_session()
 
         article = extract_article(
-            session=session,
+            session=local_session,
             discovered=discoveries[url],
             raw_html_dir=raw_html_dir,
         )
 
-        articles.append(article)
+        return index, article
 
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
+    def build_parallel_error_article(url: str, exc: Exception) -> dict[str, Any]:
+        discovered = discoveries[url]
+
+        return {
+            "raw": {
+                "source": "biobiochile",
+                "source_type": "news_site",
+                "url": url,
+            },
+            "technical": {
+                "http_status": None,
+                "content_type": "",
+                "downloaded_from_sitemap": discovered.discovered_from_sitemap,
+                "downloaded_from_feed": discovered.discovered_from_feed,
+                "html_raw_path": "",
+                "parser_version": PARSER_VERSION,
+                "parse_success": False,
+                "parse_errors": [f"parallel_worker_error: {exc}"],
+                "template_noise_detected": False,
+                "robots_allowed_checked": "not_checked",
+                "discovery_sources": discovered.discovery_sources or [],
+            },
+        }
+
+    if article_workers <= 1:
+        for index, url in enumerate(urls):
+            print(f"[{index + 1}/{len(urls)}] Descargando: {url}")
+
+            try:
+                _, article = worker(index, url)
+                articles[index] = article
+            except Exception as exc:
+                print(f"[{index + 1}/{len(urls)}] ERROR: {url} | {exc}")
+                articles[index] = build_parallel_error_article(url, exc)
+
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+
+    else:
+        print(f"Descargando noticias en paralelo con {article_workers} workers...")
+
+        with ThreadPoolExecutor(max_workers=article_workers) as executor:
+            futures = {
+                executor.submit(worker, index, url): (index, url)
+                for index, url in enumerate(urls)
+            }
+
+            for completed, future in enumerate(as_completed(futures), start=1):
+                index, url = futures[future]
+
+                try:
+                    result_index, article = future.result()
+                    articles[result_index] = article
+                    print(f"[{completed}/{len(urls)}] OK: {url}")
+
+                except Exception as exc:
+                    print(f"[{completed}/{len(urls)}] ERROR: {url} | {exc}")
+                    articles[index] = build_parallel_error_article(url, exc)
+
+    articles = [article for article in articles if article is not None]
 
     write_output(
         output_path=output_path,
@@ -1772,6 +1851,13 @@ def main() -> None:
         ),
     )
 
+    parser.add_argument(
+        "--article-workers",
+        type=int,
+        default=8,
+        help="Número de noticias a descargar en paralelo por día. Usa 1 para modo secuencial.",
+    )
+
     args = parser.parse_args()
 
     end_date = parse_target_date(args.date)
@@ -1802,6 +1888,7 @@ def main() -> None:
                 max_articles=args.max_articles,
                 sleep_seconds=args.sleep,
                 max_category_pages=args.max_category_pages,
+                article_workers=args.article_workers
             )
             global_summary.append(summary)
         except Exception as exc:

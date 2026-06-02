@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import time
+from concurrent.futures import as_completed, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 from zoneinfo import ZoneInfo
+import html as html_lib
 
 
 BASE_URL = "https://www.elmostrador.cl"
@@ -28,6 +30,29 @@ TIMEZONE = "America/Santiago"
 REQUEST_TIMEOUT = 30
 DEFAULT_SLEEP_SECONDS = 0.5
 DEFAULT_MAX_CATEGORY_PAGES = 350
+
+ELMOSTRADOR_BOILERPLATE_PATTERNS = [
+    r"\bsíntesis generada con openai\b",
+    r"\bsintesis generada con openai\b",
+    r"\bdesarrollado por el mostrador\b",
+    r"\btambién te puede interesar\b",
+    r"\btambien te puede interesar\b",
+    r"\bnoticias del día\b",
+    r"\bnoticias del dia\b",
+    r"\bdestacados\b",
+    r"\bver más\b",
+    r"\bver mas\b",
+    r"\bpublicidad\b",
+    r"\bsíguenos en\b",
+    r"\bsiguenos en\b",
+    r"\bsúmate a nuestro canal\b",
+    r"\bsumate a nuestro canal\b",
+    r"\breciba los newsletter\b",
+    r"\binscríbete en el newsletter\b",
+    r"\binscribete en el newsletter\b",
+    r"\balgunos derechos reservados\b",
+    r"\binfo@elmostrador\.cl\b",
+]
 
 DEFAULT_SECTION_ARCHIVE_URLS = [
     f"{BASE_URL}/",
@@ -134,12 +159,98 @@ def create_session() -> requests.Session:
     return session
 
 
+def decode_response_text(response: requests.Response) -> str:
+    """
+    Decodifica HTML/XML de forma estable.
+    Evita problemas de caracteres cuando response.text no detecta bien encoding.
+    """
+    try:
+        return response.content.decode("utf-8", errors="replace")
+    except Exception:
+        response.encoding = response.apparent_encoding or response.encoding or "utf-8"
+        return response.text
+
+def repair_mojibake(value: str) -> str:
+    """
+    Corrige casos típicos:
+    'dÃ©ficit' -> 'déficit'
+    'caÃ­da' -> 'caída'
+    """
+    if not isinstance(value, str) or not value:
+        return value or ""
+
+    markers = ("Ã", "Â", "â€", "â€œ", "â€", "â€™", "ðŸ")
+
+    if not any(marker in value for marker in markers):
+        return value
+
+    candidates = [value]
+
+    for source_encoding in ("latin1", "cp1252"):
+        try:
+            candidates.append(
+                value.encode(source_encoding, errors="ignore").decode("utf-8", errors="ignore")
+            )
+        except Exception:
+            pass
+
+    def badness(text: str) -> int:
+        return sum(text.count(marker) for marker in markers) + text.count("�") * 3
+
+    return min(candidates, key=badness)
+
+
+def remove_elmostrador_boilerplate(value: str) -> str:
+    """
+    Elimina ruido repetido propio de El Mostrador, sin eliminar el contenido útil.
+    """
+    if not isinstance(value, str) or not value:
+        return value or ""
+
+    text = value
+
+    for pattern in ELMOSTRADOR_BOILERPLATE_PATTERNS:
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def normalize_text(value: Any) -> str:
+    """
+    Normaliza HTML entities, espacios, mojibake y boilerplate editorial.
+    """
+    if value is None:
+        return ""
+
+    text = str(value)
+    text = html_lib.unescape(text)
+    text = repair_mojibake(text)
+    text = remove_elmostrador_boilerplate(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def normalize_payload_texts(value: Any) -> Any:
+    """
+    Aplica normalización recursiva antes de guardar el JSON final.
+    """
+    if isinstance(value, dict):
+        return {k: normalize_payload_texts(v) for k, v in value.items()}
+
+    if isinstance(value, list):
+        return [normalize_payload_texts(v) for v in value]
+
+    if isinstance(value, str):
+        return normalize_text(value)
+
+    return value
+
 def fetch_text(session: requests.Session, url: str) -> tuple[str, int, str]:
     response = session.get(url, timeout=REQUEST_TIMEOUT)
     content_type = response.headers.get("Content-Type", "")
     response.raise_for_status()
-    return response.text, response.status_code, content_type
-
+    return decode_response_text(response), response.status_code, content_type
 
 def normalize_url(url: str) -> str:
     url = url.strip()
@@ -157,13 +268,12 @@ def normalize_url(url: str) -> str:
 
 
 def clean_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value or "").strip()
+    return normalize_text(value)
 
 
 def remove_template_noise(value: str) -> str:
     value = re.sub(r"\{\{.*?\}\}", "", value or "")
-    value = re.sub(r"\s+", " ", value).strip()
-    return value
+    return normalize_text(value)
 
 
 def text_or_empty(tag) -> str:
@@ -1152,26 +1262,32 @@ def remove_unwanted_tags(container) -> None:
 
 
 def is_boilerplate_paragraph(text: str) -> bool:
-    lower = text.lower()
+    lower = normalize_text(text).lower()
 
     bad_fragments = [
         "publicidad",
         "síguenos en",
+        "siguenos en",
         "súmate a nuestro canal",
+        "sumate a nuestro canal",
         "reciba los newsletter",
         "inscríbete en el newsletter",
+        "inscribete en el newsletter",
         "inscríbase",
         "volver arriba",
         "también te puede interesar",
+        "tambien te puede interesar",
         "destacados",
         "noticias del día",
+        "noticias del dia",
         "ver más",
+        "ver mas",
         "algunos derechos reservados",
         "santa lucía",
         "info@elmostrador.cl",
         "desarrollado por el mostrador",
         "síntesis generada con openai",
-        "resumen",
+        "sintesis generada con openai",
         "{{",
         "}}",
     ]
@@ -1210,6 +1326,7 @@ def extract_ai_summary(soup: BeautifulSoup) -> tuple[str, bool, str]:
                     collected.append(next_line)
 
             summary = clean_text(" ".join(collected))
+            summary = remove_elmostrador_boilerplate(summary)
 
             if summary:
                 return summary, True, "openai_elmostrador"
@@ -1671,7 +1788,7 @@ def extract_article(
         http_status = response.status_code
         content_type = response.headers.get("Content-Type", "")
         response.raise_for_status()
-        html = response.text
+        html = decode_response_text(response)
     except Exception as exc:
         return build_empty_error_article(
             discovered=discovered,
@@ -1949,6 +2066,8 @@ def write_output(
         "articles": articles,
     }
 
+    payload = normalize_payload_texts(payload)
+
     output_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -1984,6 +2103,7 @@ def scrape_single_day(
     sleep_seconds: float = DEFAULT_SLEEP_SECONDS,
     max_category_pages: int = DEFAULT_MAX_CATEGORY_PAGES,
     preloaded_categoria: dict[str, DiscoveredUrl] | None = None,
+    article_workers: int = 8,
 ) -> dict[str, Any]:
     day_dir = base_dir / "mostrador" / date_dir_name(target)
     raw_html_dir = day_dir / "html"
@@ -2020,21 +2140,84 @@ def scrape_single_day(
 
     print()
 
-    articles: list[dict[str, Any]] = []
+    articles: list[dict[str, Any] | None] = [None] * len(urls)
 
-    for index, url in enumerate(urls, start=1):
-        print(f"[{index}/{len(urls)}] Descargando: {url}")
+    def worker(index: int, url: str) -> tuple[int, dict[str, Any]]:
+        local_session = create_session()
 
         article = extract_article(
-            session=session,
+            session=local_session,
             discovered=discoveries[url],
             raw_html_dir=raw_html_dir,
         )
 
-        articles.append(article)
+        return index, article
 
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
+    def build_parallel_error_article(url: str, exc: Exception) -> dict[str, Any]:
+        discovered = discoveries[url]
+
+        return {
+            "raw": {
+                "source": "elmostrador",
+                "source_type": "news_site",
+                "url": url,
+                "canonical_url": "",
+                "article_id": "",
+                "slug": get_slug(url),
+            },
+            "technical": {
+                "http_status": None,
+                "content_type": "",
+                "downloaded_from_sitemap": discovered.discovered_from_sitemap,
+                "downloaded_from_feed": discovered.discovered_from_feed,
+                "downloaded_from_dia_page": discovered.discovered_from_dia_page,
+                "downloaded_from_categoria_dia": discovered.discovered_from_categoria_dia,
+                "html_raw_path": "",
+                "parser_version": PARSER_VERSION,
+                "parse_success": False,
+                "parse_errors": [f"parallel_worker_error: {exc}"],
+                "template_noise_detected": False,
+                "robots_allowed_checked": "not_checked",
+                "discovery_sources": discovered.discovery_sources,
+            },
+        }
+
+    if article_workers <= 1:
+        for index, url in enumerate(urls):
+            print(f"[{index + 1}/{len(urls)}] Descargando: {url}")
+
+            try:
+                _, article = worker(index, url)
+                articles[index] = article
+            except Exception as exc:
+                print(f"[{index + 1}/{len(urls)}] ERROR: {url} | {exc}")
+                articles[index] = build_parallel_error_article(url, exc)
+
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+
+    else:
+        print(f"Descargando noticias en paralelo con {article_workers} workers...")
+
+        with ThreadPoolExecutor(max_workers=article_workers) as executor:
+            futures = {
+                executor.submit(worker, index, url): (index, url)
+                for index, url in enumerate(urls)
+            }
+
+            for completed, future in enumerate(as_completed(futures), start=1):
+                index, url = futures[future]
+
+                try:
+                    result_index, article = future.result()
+                    articles[result_index] = article
+                    print(f"[{completed}/{len(urls)}] OK: {url}")
+
+                except Exception as exc:
+                    print(f"[{completed}/{len(urls)}] ERROR: {url} | {exc}")
+                    articles[index] = build_parallel_error_article(url, exc)
+
+    articles = [article for article in articles if article is not None]
 
     write_output(
         output_path=output_path,
@@ -2118,6 +2301,13 @@ def main() -> None:
         ),
     )
 
+    parser.add_argument(
+        "--article-workers",
+        type=int,
+        default=8,
+        help="Número de noticias a descargar en paralelo por día. Usa 1 para modo secuencial.",
+    )
+
     args = parser.parse_args()
 
     end_date = parse_target_date(args.date)
@@ -2166,6 +2356,7 @@ def main() -> None:
                 sleep_seconds=args.sleep,
                 max_category_pages=args.max_category_pages,
                 preloaded_categoria=preloaded_categoria,
+                article_workers=args.article_workers,
             )
             global_summary.append(summary)
         except Exception as exc:
