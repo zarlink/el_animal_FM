@@ -32,6 +32,16 @@ DEFAULT_MAX_CATEGORY_PAGES = 30
 
 PRIMARY_RE = re.compile(r"primary:\s+([a-z0-9-]+)\s+([a-z0-9-]+)", re.I)
 
+BIOBIO_AI_BOILERPLATE_PATTERNS = [
+    r"\bver resumen\b",
+    r"\bresumen generado con una herramienta de inteligencia artificial desarrollada por biobiochile y revisado por el autor de este artículo\.?",
+    r"\bresumen generado con una herramienta de inteligencia artificial\.?",
+    r"\bherramienta de inteligencia artificial desarrollada por biobiochile\.?",
+    r"\bdesarrollada por biobiochile y revisado por el autor de este artículo\.?",
+    r"\bdesarrollada por biobiochile\.?",
+    r"\brevisado por el autor de este artículo\.?",
+]
+
 DEFAULT_CATEGORY_ARCHIVE_URLS = [
     f"{BASE_URL}/lista/categorias/nacional",
     f"{BASE_URL}/lista/categorias/internacional",
@@ -142,17 +152,33 @@ def repair_mojibake(value: str) -> str:
     return min(candidates, key=badness)
 
 
+def remove_biobio_ai_boilerplate(value: str) -> str:
+    """
+    Elimina el disclaimer repetido del resumen IA de BioBioChile,
+    sin eliminar necesariamente el contenido útil del resumen.
+    """
+    if not isinstance(value, str) or not value:
+        return value or ""
+
+    text = value
+
+    for pattern in BIOBIO_AI_BOILERPLATE_PATTERNS:
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
 def normalize_text(value: Any) -> str:
-    """Normaliza HTML entities, espacios y mojibake en todos los textos extraídos."""
+    """Normaliza HTML entities, espacios, mojibake y boilerplate IA en todos los textos extraídos."""
     if value is None:
         return ""
 
     text = str(value)
     text = html_lib.unescape(text)
     text = repair_mojibake(text)
+    text = remove_biobio_ai_boilerplate(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
-
 
 def normalize_payload_texts(value: Any) -> Any:
     """Aplica normalización recursiva antes de guardar el JSON final."""
@@ -1007,7 +1033,7 @@ def remove_unwanted_tags(container) -> None:
 
 
 def is_boilerplate_paragraph(text: str) -> bool:
-    lower = text.lower()
+    lower = normalize_text(text).lower()
 
     bad_fragments = [
         "selecciona tu región",
@@ -1020,6 +1046,14 @@ def is_boilerplate_paragraph(text: str) -> bool:
         "síguenos",
         "newsletter",
         "lorem ipsum",
+
+        # Boilerplate IA BioBioChile
+        "ver resumen",
+        "resumen generado con una herramienta de inteligencia artificial",
+        "herramienta de inteligencia artificial desarrollada por biobiochile",
+        "desarrollada por biobiochile",
+        "revisado por el autor de este artículo",
+
         "{{",
         "}}",
     ]
@@ -1133,7 +1167,11 @@ def extract_ai_summary(soup: BeautifulSoup) -> tuple[str, bool, str]:
                     possible_texts.append(nearby)
 
     if possible_texts:
-        return possible_texts[0], True, "bio_bio_ai_reviewed_by_author"
+        cleaned_summary = remove_biobio_ai_boilerplate(possible_texts[0])
+        cleaned_summary = normalize_text(cleaned_summary)
+
+        if cleaned_summary:
+            return cleaned_summary, True, "bio_bio_ai_reviewed_by_author"
 
     return "", False, ""
 
