@@ -1,8 +1,12 @@
 import html
 import json
+import logging
+import os
 import re
 import unicodedata
-from collections import Counter
+from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor
+import time
 
 import hdbscan
 import numpy as np
@@ -11,6 +15,27 @@ import yake
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from spacy.lang.es.stop_words import STOP_WORDS as SPACY_STOPWORDS
+
+
+# ============================================================
+# 0. LOGGING Y CONFIGURACIÓN DE PARALELISMO
+# ============================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+logger = logging.getLogger("creador_diccionario")
+
+DEFAULT_RECORD_WORKERS = max(1, min(os.cpu_count() or 1, 12))
+RECORD_LOG_EVERY = 250
+RECORD_CHUNKSIZE = 25
+
+# ============================================================
+# 1. STOPWORDS
+# ============================================================
 
 CUSTOM_STOPWORDS = {
     # Conectores y palabras funcionales adicionales
@@ -46,6 +71,8 @@ CUSTOM_STOPWORDS = {
     "explicó", "explico", "informó", "informo", "aseguró", "aseguro",
     "confirmó", "confirmo", "indicó", "indico", "agregó", "agrego",
     "manifestó", "manifesto", "declaró", "declaro", "anunció", "anuncio",
+    "destacó", "destaco", "detalló", "detallo", "advirtió", "advirtio",
+    "concluyó", "concluyo", "señala", "reveló", "revelo",
 
     # Palabras editoriales o de navegación
     "ver", "resumen", "publicidad", "newsletter", "suscríbete", "suscribete",
@@ -63,7 +90,7 @@ CUSTOM_STOPWORDS = {
     "nueva", "mayor", "primer", "primera", "pasado", "actual",
     "bien", "fin", "marco", "línea", "linea",
 
-    # Adicionales
+    # Adicionales detectados en el corpus
     "personas", "país", "chile", "región", "nacional",
     "información", "comunidad", "vida", "proceso", "clave",
     "zona", "mundo", "sistema", "centro", "especialmente",
@@ -71,17 +98,65 @@ CUSTOM_STOPWORDS = {
     "asimismo", "objetivo", "principal", "actualmente",
     "distintos", "distintas", "sentido", "presencia",
     "importantes", "base", "ejemplo", "fecha", "sitio",
-    "com", "twitter", "pic", "the", "may","súmate", "sumate",
-    "informado", "precisas", "seguimiento", "detallado",
-    "entrevistas", "personajes", "influyen",
-    "comunidad", "súmate", "sumate",
-    "informado", "precisas", "seguimiento", "detallado",
-    "entrevistas", "personajes", "influyen",
-    "comunidad","súmate", "sumate","política políticas",
+    "com", "twitter", "pic", "the", "may",
+    "súmate", "sumate", "informado", "precisas", "seguimiento", "detallado",
+    "entrevistas", "personajes", "influyen", "política políticas",
+    "busca", "medida", "condiciones", "apoyo", "persona",
+    "comunicado", "plazo", "espera", "principales", "punto",
+    "mantiene", "respuesta", "paso", "directamente", "posteriormente",
+    "necesidad", "oficial", "llamado", "explica", "permite",
+    "problema", "llegar", "futuro", "seguir", "incluyendo",
+    "mantener", "comenzó", "actividad", "avanzar", "importancia",
+    "participación", "medios", "ocurrido", "valor", "destaca",
+    "política políticas públicas","cabe","obstante","allá","deja",
+    "cosas","realidad","tomar","entrega","conjunto","cumplir","conocido",
+    "representa","recibió","incluye","apunta","revisar","principalmente",
+    "posibles","ambas","dejar","recibir","máximo","diversas",
 }
 
-
 STOP = set(SPACY_STOPWORDS) | CUSTOM_STOPWORDS
+
+# ============================================================
+# 2. NORMALIZACIONES DE FRASES IMPORTANTES
+# ============================================================
+# Estas normalizaciones evitan que el vectorizador separe conceptos relevantes
+# como "Estados Unidos", "Banco Central" o "Wall Street" en tokens sueltos.
+
+PHRASE_NORMALIZATIONS = {
+    "estados unidos": "estados_unidos",
+    "ee.uu.": "estados_unidos",
+    "eeuu": "estados_unidos",
+    "donald trump": "donald_trump",
+    "josé antonio kast": "jose_antonio_kast",
+    "jose antonio kast": "jose_antonio_kast",
+    "banco central": "banco_central",
+    "mercado financiero": "mercado_financiero",
+    "wall street": "wall_street",
+    "estrecho de ormuz": "estrecho_de_ormuz",
+    "ministerio de hacienda": "ministerio_de_hacienda",
+    "ministro de hacienda": "ministro_de_hacienda",
+    "subsidio eléctrico": "subsidio_electrico",
+    "subsidio electrico": "subsidio_electrico",
+    "tasa de interés": "tasa_de_interes",
+    "tasa de interes": "tasa_de_interes",
+    "tipo de cambio": "tipo_de_cambio",
+    "renta fija": "renta_fija",
+    "renta variable": "renta_variable",
+    "política fiscal": "politica_fiscal",
+    "politica fiscal": "politica_fiscal",
+    "déficit fiscal": "deficit_fiscal",
+    "deficit fiscal": "deficit_fiscal",
+    "gasto fiscal": "gasto_fiscal",
+    "obras públicas": "obras_publicas",
+    "obras publicas": "obras_publicas",
+}
+
+# ============================================================
+# 3. SEMILLAS TEMÁTICAS
+# ============================================================
+
+# Se mantienen estas semillas por compatibilidad conceptual, pero el filtrado
+# principal usa las familias estrictas y contextuales definidas más abajo.
 
 FINANCIAL_SEEDS_STRONG = {
     "hacienda",
@@ -98,7 +173,6 @@ FINANCIAL_SEEDS_STRONG = {
     "renta fija",
     "renta variable",
     "bolsa",
-    "acciones",
     "bonos",
     "dólar",
     "tipo de cambio",
@@ -119,7 +193,6 @@ FINANCIAL_SEEDS_MEDIUM = {
     "pesos",
     "dólares",
     "millones",
-    "energía",
     "petróleo",
     "gas",
     "cobre",
@@ -148,19 +221,24 @@ FINANCIAL_SEEDS_CONTEXT = {
 
 MARKET_STRICT_SEEDS = {
     "banco central",
+    "banco_central",
     "cmf",
     "mercado financiero",
+    "mercado_financiero",
     "renta fija",
+    "renta_fija",
     "renta variable",
+    "renta_variable",
     "bolsa",
-    "acciones",
     "bonos",
     "wall street",
+    "wall_street",
     "dólar",
-    "dolares",
-    "dólares",
+    "dolar",
     "tipo de cambio",
+    "tipo_de_cambio",
     "tasa de interés",
+    "tasa_de_interes",
     "tasa de interes",
     "ipc",
     "inflación",
@@ -206,8 +284,6 @@ COMMODITY_STRICT_SEEDS = {
     "gas",
     "minería",
     "mineria",
-    "energía",
-    "energia",
     "opep",
 }
 
@@ -270,6 +346,130 @@ SOCIAL_SECURITY_NOISE_SEEDS = {
     "policia",
 }
 
+# Términos ambiguos: no deben gatillar una clasificación financiera por sí solos.
+# Se usan solo si aparecen junto con contexto bursátil/financiero.
+AMBIGUOUS_MARKET_SEEDS = {
+    "acciones",
+    "capital",
+    "mercado",
+    "empresa",
+    "empresas",
+}
+
+AMOUNT_SEEDS = {
+    "millones",
+    "miles",
+    "pesos",
+    "dólares",
+    "dolares",
+    "usd",
+    "uf",
+    "$",
+}
+
+AMOUNT_CONTEXT_SEEDS = {
+    "hacienda",
+    "ministerio_de_hacienda",
+    "ministro_de_hacienda",
+    "presupuesto",
+    "deficit_fiscal",
+    "gasto_fiscal",
+    "politica_fiscal",
+    "subsidio_electrico",
+    "recursos_publicos",
+
+    "banco_central",
+    "mercado_financiero",
+    "wall_street",
+    "bolsa",
+    "bonos",
+    "renta_fija",
+    "renta_variable",
+    "ipc",
+    "inflación",
+    "inflacion",
+    "tasa_de_interes",
+    "tipo_de_cambio",
+
+    "codelco",
+    "enap",
+    "sqm",
+    "cap",
+    "copec",
+    "falabella",
+    "cencosud",
+
+    "ingresos",
+    "utilidades",
+    "ganancias",
+    "pérdidas",
+    "perdidas",
+    "deuda",
+    "financiamiento",
+    "inversión",
+    "inversion",
+
+    "cobre",
+    "litio",
+    "petróleo",
+    "petroleo",
+    "gas",
+}
+
+MARKET_CONTEXT_SEEDS = {
+    "bolsa",
+    "wall street",
+    "wall_street",
+    "renta variable",
+    "renta_variable",
+    "mercado financiero",
+    "mercado_financiero",
+    "inversionistas",
+    "bursátil",
+    "bursatil",
+    "índice",
+    "indice",
+    "acciones chilenas",
+    "acciones_chilenas",
+    "acciones bursátiles",
+    "acciones_bursatiles",
+}
+
+# Energía también es ambigua. Solo se considera señal de mercado si aparece
+# asociada a electricidad, tarifas, combustibles, petróleo, gas, ENAP, OPEP, etc.
+ENERGY_CONTEXT_SEEDS = {
+    "eléctrico",
+    "electrico",
+    "eléctrica",
+    "electrica",
+    "tarifa",
+    "tarifas",
+    "tarifario",
+    "subsidio eléctrico",
+    "subsidio_electrico",
+    "generación eléctrica",
+    "generacion electrica",
+    "transmisión eléctrica",
+    "transmision electrica",
+    "distribución eléctrica",
+    "distribucion electrica",
+    "enap",
+    "petróleo",
+    "petroleo",
+    "gas",
+    "combustible",
+    "combustibles",
+    "bencina",
+    "diésel",
+    "diesel",
+    "opep",
+}
+
+
+# ============================================================
+# 4. LIMPIEZA Y NORMALIZACIÓN
+# ============================================================
+
 def clean(text: str) -> str:
     text = html.unescape(text or "")
     text = re.sub(r"<script.*?</script>", " ", text, flags=re.I | re.S)
@@ -278,6 +478,12 @@ def clean(text: str) -> str:
     text = re.sub(r"https?://\S+", " ", text)
 
     text = unicodedata.normalize("NFKC", text).lower()
+
+    # Normaliza frases compuestas antes de tokenizar.
+    for phrase, replacement in PHRASE_NORMALIZATIONS.items():
+        text = text.replace(phrase, replacement)
+        text = re.sub(r"\btrump\b", "donald_trump", text)
+        text = re.sub(r"\bkast\b", "jose_antonio_kast", text)
 
     # Boilerplate BioBio / El Mostrador
     boilerplate_patterns = [
@@ -315,20 +521,15 @@ def clean(text: str) -> str:
         r"seguimiento\s+detallado\s+políticas",
         r"políticas\s+públicas\s+entrevistas",
         r"entrevistas\s+personajes\s+influyen",
-        r"súmate\s+(?:a\s+)?(?:nuestra\s+)?(?:comunidad\s+)?informado\s+precisas\s+seguimiento\s+detallado\s+políticas\s+públicas\s+entrevistas\s+personajes\s+influyen",
-        r"súmate\s+informado\s+precisas",
-        r"política\s+súmate\s+informado",
-        r"informado\s+precisas\s+seguimiento",
-        r"seguimiento\s+detallado\s+políticas",
-        r"políticas\s+públicas\s+entrevistas",
-        r"entrevistas\s+personajes\s+influyen",
-
+        r"política\W+políticas(?:\W+públicas)?",
+        r"política\W+políticas(?:\W+públicas)?",
+        r"politica\W+politicas(?:\W+publicas)?",
     ]
 
     for pattern in boilerplate_patterns:
         text = re.sub(pattern, " ", text, flags=re.I)
 
-    # Esto elimina frases parciales que quedan aunque el regex anterior no capture el bloque completo.
+    # Limpieza adicional de fragmentos residuales.
     for fragment in [
         "súmate informado",
         "sumate informado",
@@ -354,8 +555,23 @@ def clean(text: str) -> str:
     text = re.sub(rf"\b\d{{1,2}}\s+({meses})\s+\d{{4}}\b", " ", text)
     text = re.sub(rf"\b({meses})\s+\d{{4}}\b", " ", text)
 
-    # Mantiene letras, números, %, $, guiones y puntos.
-    text = re.sub(r"[^a-záéíóúñü0-9%$/\-\.\s]", " ", text)
+    # Mantiene letras, números, %, $, guiones, puntos y guion bajo.
+    text = re.sub(r"[^a-záéíóúñü0-9_%$/\-\.\s]", " ", text)
+
+    # Limpieza final de remanentes editoriales que sobreviven a la primera pasada.
+    text = re.sub(
+        r"\bpol[íi]tica\s+pol[íi]ticas(?:\s+p[úu]blicas)?\b",
+        " ",
+        text,
+        flags=re.I,
+    )
+
+    text = re.sub(
+        r"\bpol[íi]ticas\s+p[úu]blicas\s+entrevistas\b.*?(?:influyen)?",
+        " ",
+        text,
+        flags=re.I,
+    )
 
     # Elimina números sueltos, pero deja porcentajes o montos si vienen unidos.
     text = re.sub(r"\b\d+\b", " ", text)
@@ -363,8 +579,7 @@ def clean(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-data = json.load(open("noticias_unificadas.txt", encoding="utf-8"))
-articles = data["articles"] if isinstance(data, dict) else data
+
 
 def build_dictionary_text(a: dict) -> str:
     parts = [
@@ -380,6 +595,7 @@ def build_dictionary_text(a: dict) -> str:
         parts = [a.get("classification_text", "")]
 
     return clean(" ".join(str(p) for p in parts if p))
+
 
 def should_use_for_financial_dictionary(a: dict) -> bool:
     excluded_flags = [
@@ -419,14 +635,20 @@ def should_use_for_financial_dictionary(a: dict) -> bool:
 
     return True
 
-WORD_CHARS = "a-záéíóúñü0-9"
+
+# ============================================================
+# 6. MATCHING DE SEMILLAS Y CLASIFICACIÓN DE FAMILIAS
+# ============================================================
+
+WORD_CHARS = "a-záéíóúñü0-9_"
 
 
 def contains_seed(text: str, seed: str) -> bool:
     """
     Busca una semilla como término o frase completa.
-    Evita matches demasiado accidentales.
+    Evita matches accidentales dentro de otras palabras.
     """
+    text = clean(text)
     seed = clean(seed)
 
     if not seed:
@@ -443,6 +665,101 @@ def seed_hits(text: str, seeds: set[str]) -> set[str]:
     text = clean(text)
     return {seed for seed in seeds if contains_seed(text, seed)}
 
+
+def has_market_context(text: str) -> bool:
+    """
+    Determina si una palabra ambigua como 'acciones' o 'mercado'
+    aparece en un contexto realmente financiero/bursátil.
+    """
+    text = clean(text)
+    return bool(seed_hits(text, MARKET_CONTEXT_SEEDS))
+
+
+def has_ambiguous_market_signal(text: str) -> bool:
+    """
+    Permite usar términos ambiguos solo cuando van acompañados
+    de contexto bursátil o financiero.
+    """
+    text = clean(text)
+    ambiguous_hits = seed_hits(text, AMBIGUOUS_MARKET_SEEDS)
+    return bool(ambiguous_hits) and has_market_context(text)
+
+def has_amount_context(text: str) -> bool:
+    """
+    Permite considerar montos como millones, pesos o dólares solo si
+    aparecen junto a señales económicas, financieras, fiscales,
+    empresariales o de commodities.
+    """
+    text = clean(text)
+
+    amount_hits = seed_hits(text, AMOUNT_SEEDS)
+
+    if not amount_hits:
+        return False
+
+    context_hits = seed_hits(text, AMOUNT_CONTEXT_SEEDS)
+
+    return bool(context_hits)
+
+
+def has_energy_market_context(text: str) -> bool:
+    """
+    Permite usar 'energía' solo cuando aparece en contexto eléctrico,
+    tarifario, petrolero, gasífero o de combustibles.
+    """
+    text = clean(text)
+
+    has_energy_word = (
+            contains_seed(text, "energía")
+            or contains_seed(text, "energia")
+    )
+
+    has_context = bool(seed_hits(text, ENERGY_CONTEXT_SEEDS))
+
+    return has_energy_word and has_context
+
+
+def has_geopolitical_market_context(text: str) -> bool:
+    """
+    Determina si una noticia geopolítica tiene contexto económico,
+    comercial, energético, financiero o de commodities.
+    """
+    text = clean(text)
+
+    market_or_commodity_context = (
+        bool(seed_hits(text, MARKET_STRICT_SEEDS))
+        or bool(seed_hits(text, COMMODITY_STRICT_SEEDS))
+        or has_amount_context(text)
+        or has_energy_market_context(text)
+    )
+
+    direct_context = any(
+        contains_seed(text, seed)
+        for seed in {
+            "aranceles",
+            "sanciones",
+            "comercio",
+            "petróleo",
+            "petroleo",
+            "gas",
+            "dólar",
+            "dolar",
+            "wall_street",
+            "wall street",
+            "bolsa",
+            "opep",
+            "estrecho_de_ormuz",
+            "estrecho de ormuz",
+            "precios",
+            "exportaciones",
+            "importaciones",
+            "suministro",
+            "cadena de suministro",
+        }
+    )
+
+    return market_or_commodity_context or direct_context
+
 def classify_text_families(text: str) -> dict:
     """
     Clasifica un texto en familias temáticas útiles para diccionarios.
@@ -458,11 +775,26 @@ def classify_text_families(text: str) -> dict:
     geopolitical_hits = seed_hits(text, GEOPOLITICAL_RISK_SEEDS)
     social_noise_hits = seed_hits(text, SOCIAL_SECURITY_NOISE_SEEDS)
 
+    ambiguous_market_hits = seed_hits(text, AMBIGUOUS_MARKET_SEEDS)
+    amount_hits = seed_hits(text, AMOUNT_SEEDS)
+    energy_context_hits = seed_hits(text, ENERGY_CONTEXT_SEEDS)
+
+    # Agrega términos ambiguos al mercado solo si hay contexto bursátil/financiero.
+    if has_ambiguous_market_signal(text):
+        market_hits = market_hits | ambiguous_market_hits
+
+    if has_amount_context(text):
+        market_hits = market_hits | amount_hits
+
+    # Agrega energía solo si aparece en contexto energético real.
+    if has_energy_market_context(text):
+        commodity_hits = commodity_hits | {"energia_contextual"}
+
     strict_score = (
-        len(market_hits) * 3
-        + len(fiscal_hits) * 3
-        + len(company_hits) * 3
-        + len(commodity_hits) * 3
+            len(market_hits) * 3
+            + len(fiscal_hits) * 3
+            + len(company_hits) * 3
+            + len(commodity_hits) * 3
     )
 
     political_score = len(political_hits)
@@ -472,32 +804,24 @@ def classify_text_families(text: str) -> dict:
     is_financial_strict = strict_score >= 3
 
     is_political_risk = (
-        political_score >= 2
-        and (
-            len(fiscal_hits) > 0
-            or len(market_hits) > 0
-            or len(company_hits) > 0
-            or len(commodity_hits) > 0
-        )
+            political_score >= 2
+            and (
+                    len(fiscal_hits) > 0
+                    or len(market_hits) > 0
+                    or len(company_hits) > 0
+                    or len(commodity_hits) > 0
+            )
     )
 
     is_geopolitical_market = (
-        geopolitical_score >= 1
-        and (
-            len(market_hits) > 0
-            or len(commodity_hits) > 0
-            or "aranceles" in text
-            or "petróleo" in text
-            or "petroleo" in text
-            or "dólar" in text
-            or "dolar" in text
-        )
+            geopolitical_score >= 1
+            and has_geopolitical_market_context(text)
     )
 
     is_social_noise_dominant = (
-        social_noise_score >= 2
-        and strict_score == 0
-        and geopolitical_score == 0
+            social_noise_score >= 2
+            and strict_score == 0
+            and geopolitical_score == 0
     )
 
     return {
@@ -518,6 +842,14 @@ def classify_text_families(text: str) -> dict:
         "political_hits": sorted(political_hits),
         "geopolitical_hits": sorted(geopolitical_hits),
         "social_noise_hits": sorted(social_noise_hits),
+
+        "ambiguous_market_hits": sorted(ambiguous_market_hits),
+        "amount_hits": sorted(amount_hits),
+        "energy_context_hits": sorted(energy_context_hits),
+        "has_market_context": has_market_context(text),
+        "has_amount_context": has_amount_context(text),
+        "has_energy_market_context": has_energy_market_context(text),
+        "has_geopolitical_market_context": has_geopolitical_market_context(text),
     }
 
 
@@ -530,53 +862,130 @@ def has_financial_seed(text: str) -> bool:
     return info["is_financial_strict"]
 
 
-records = []
+def process_article_for_record(a: dict) -> dict:
+    """
+    Worker independiente para procesar una noticia.
 
-for a in articles:
-    if not should_use_for_financial_dictionary(a):
-        continue
+    Retorna un dict con status:
+    - ok: artículo convertido en record válido.
+    - excluded: descartado por sección/tipo.
+    - empty: sin texto útil.
+    - error: error controlado.
+    """
+    try:
+        if not should_use_for_financial_dictionary(a):
+            return {
+                "status": "excluded",
+                "reason": "section_or_type_excluded",
+            }
 
-    txt = build_dictionary_text(a)
+        txt = build_dictionary_text(a)
 
-    if not txt:
-        continue
+        if not txt:
+            return {
+                "status": "empty",
+                "reason": "empty_dictionary_text",
+            }
 
-    family_info = classify_text_families(txt)
+        family_info = classify_text_families(txt)
 
-    records.append({
-        "article": a,
-        "text": txt,
-        "family_info": family_info,
-    })
+        return {
+            "status": "ok",
+            "record": {
+                "article": a,
+                "text": txt,
+                "family_info": family_info,
+            },
+        }
 
-texts = [r["text"] for r in records]
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": repr(exc),
+            "url": a.get("url", ""),
+            "title": a.get("title", ""),
+        }
 
-financial_strict_records = [
-    r for r in records
-    if r["family_info"]["is_financial_strict"]
-    and not r["family_info"]["is_social_noise_dominant"]
-]
+def build_records_parallel(
+    articles: list[dict],
+    max_workers: int = DEFAULT_RECORD_WORKERS,
+    log_every: int = RECORD_LOG_EVERY,
+    chunksize: int = RECORD_CHUNKSIZE,
+) -> tuple[list[dict], Counter]:
+    """
+    Construye records en paralelo.
 
-political_risk_records = [
-    r for r in records
-    if r["family_info"]["is_political_risk"]
-    and not r["family_info"]["is_social_noise_dominant"]
-]
+    Cada artículo se procesa de forma independiente:
+    - filtro por sección/tipo
+    - construcción de texto
+    - limpieza
+    - clasificación por familias
+    """
+    total = len(articles)
+    records = []
+    stats = Counter()
 
-geopolitical_market_records = [
-    r for r in records
-    if r["family_info"]["is_geopolitical_market"]
-    and not r["family_info"]["is_social_noise_dominant"]
-]
+    logger.info(
+        f"INICIO | Construcción paralela de records | "
+        f"artículos={total} | workers={max_workers} | chunksize={chunksize}"
+    )
 
-financial_texts = [r["text"] for r in financial_strict_records]
-political_risk_texts = [r["text"] for r in political_risk_records]
-geopolitical_market_texts = [r["text"] for r in geopolitical_market_records]
+    start = time.perf_counter()
 
-print(f"Textos generales usados: {len(texts)}")
-print(f"Textos financieros estrictos: {len(financial_texts)}")
-print(f"Textos riesgo político: {len(political_risk_texts)}")
-print(f"Textos geopolíticos con mercado: {len(geopolitical_market_texts)}")
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        results_iter = executor.map(
+            process_article_for_record,
+            articles,
+            chunksize=chunksize,
+        )
+
+        for index, result in enumerate(results_iter, start=1):
+            status = result.get("status", "unknown")
+            stats[status] += 1
+
+            if status == "ok":
+                records.append(result["record"])
+
+            elif status == "error":
+                logger.warning(
+                    "Error procesando artículo | "
+                    f"url={result.get('url', '')} | "
+                    f"title={result.get('title', '')} | "
+                    f"error={result.get('error', '')}"
+                )
+
+            if index % log_every == 0 or index == total:
+                elapsed = time.perf_counter() - start
+                logger.info(
+                    f"PROGRESO | records | {index}/{total} | "
+                    f"ok={stats['ok']} | "
+                    f"excluidos={stats['excluded']} | "
+                    f"vacíos={stats['empty']} | "
+                    f"errores={stats['error']} | "
+                    f"tiempo={elapsed:.2f}s"
+                )
+
+    elapsed = time.perf_counter() - start
+
+    logger.info(
+        f"FIN | Construcción paralela de records | "
+        f"records={len(records)} | "
+        f"excluidos={stats['excluded']} | "
+        f"vacíos={stats['empty']} | "
+        f"errores={stats['error']} | "
+        f"tiempo_total={elapsed:.2f}s"
+    )
+
+    return records, stats
+
+
+
+# ============================================================
+# 8. EXTRACCIÓN DE N-GRAMAS Y TF-IDF
+# ============================================================
+
+TOKEN_PATTERN = r"(?u)\b[a-záéíóúñü][a-záéíóúñü0-9_\-]{2,}\b"
+
 
 def extract_ngrams(texts_source: list[str], min_df: int = 5) -> list[dict]:
     if not texts_source:
@@ -587,7 +996,7 @@ def extract_ngrams(texts_source: list[str], min_df: int = 5) -> list[dict]:
         min_df=min_df,
         max_df=0.6,
         stop_words=list(STOP),
-        token_pattern=r"(?u)\b[a-záéíóúñü][a-záéíóúñü0-9\-]{2,}\b"
+        token_pattern=TOKEN_PATTERN,
     )
 
     X = cv.fit_transform(texts_source)
@@ -610,6 +1019,7 @@ def extract_ngrams(texts_source: list[str], min_df: int = 5) -> list[dict]:
         reverse=True
     )[:2000]
 
+
 def extract_tfidf(texts_source: list[str], min_df: int = 3) -> list[dict]:
     if not texts_source:
         return []
@@ -619,7 +1029,7 @@ def extract_tfidf(texts_source: list[str], min_df: int = 3) -> list[dict]:
         min_df=min_df,
         max_df=0.6,
         stop_words=list(STOP),
-        token_pattern=r"(?u)\b[a-záéíóúñü][a-záéíóúñü0-9\-]{2,}\b",
+        token_pattern=TOKEN_PATTERN,
         sublinear_tf=True,
     )
 
@@ -640,49 +1050,10 @@ def extract_tfidf(texts_source: list[str], min_df: int = 3) -> list[dict]:
     )[:2000]
 
 
-financial_ngrams_top = extract_ngrams(financial_texts, min_df=3)
-political_risk_ngrams_top = extract_ngrams(political_risk_texts, min_df=3)
-geopolitical_market_ngrams_top = extract_ngrams(geopolitical_market_texts, min_df=3)
-financial_tfidf_top = extract_tfidf(financial_texts, min_df=3)
-political_risk_tfidf_top = extract_tfidf(political_risk_texts, min_df=3)
-geopolitical_market_tfidf_top = extract_tfidf(geopolitical_market_texts, min_df=3)
+# ============================================================
+# 9. YAKE
+# ============================================================
 
-# n-gramas
-cv = CountVectorizer(ngram_range=(1,3), min_df=5,max_df=0.6,
-                     stop_words=list(STOP), token_pattern=r"(?u)\b[a-záéíóúñü][a-záéíóúñü0-9\-]{2,}\b")
-X = cv.fit_transform(texts)
-
-term_counts = X.sum(axis=0).A1
-doc_freq = (X > 0).sum(axis=0).A1
-terms = cv.get_feature_names_out()
-
-ngrams_top = sorted(
-    [
-        {
-            "term": term,
-            "count": int(count),
-            "df": int(df),
-            "df_pct": float(df / len(texts)),
-        }
-        for term, count, df in zip(terms, term_counts, doc_freq)
-    ],
-    key=lambda x: (x["df"], x["count"]),
-    reverse=True
-)[:2000]
-
-# TF-IDF
-tfv = TfidfVectorizer(ngram_range=(1,3),
-                      min_df=3,
-                      max_df=0.6,
-                      stop_words=list(STOP),
-                      token_pattern=r"(?u)\b[a-záéíóúñü][a-záéíóúñü0-9\-]{2,}\b",
-                      sublinear_tf=True)
-
-T = tfv.fit_transform(texts)
-tfidf_mean = T.mean(axis=0).A1
-tfidf_top = sorted(zip(tfv.get_feature_names_out(), tfidf_mean), key=lambda x: x[1], reverse=True)[:2000]
-
-# YAKE
 def is_bad_candidate_term(term: str) -> bool:
     term = clean(term)
 
@@ -727,23 +1098,6 @@ def is_bad_candidate_term(term: str) -> bool:
         "públicas entrevistas personajes",
         "entrevistas personajes",
         "entrevistas personajes influyen",
-        "súmate informado",
-        "súmate informado precisas",
-        "política súmate",
-        "política súmate informado",
-        "informado precisas",
-        "informado precisas seguimiento",
-        "precisas seguimiento",
-        "precisas seguimiento detallado",
-        "seguimiento detallado",
-        "seguimiento detallado políticas",
-        "detallado políticas",
-        "detallado políticas públicas",
-        "políticas públicas entrevistas",
-        "públicas entrevistas",
-        "públicas entrevistas personajes",
-        "entrevistas personajes",
-        "entrevistas personajes influyen",
     ]
 
     if any(fragment in term for fragment in bad_fragments):
@@ -751,44 +1105,56 @@ def is_bad_candidate_term(term: str) -> bool:
 
     return False
 
-kw = yake.KeywordExtractor(lan="es", n=3, top=20)
-yake_scores = Counter()
 
-for txt in texts:
-    for term, score in kw.extract_keywords(txt):
-        term = clean(term)
 
-        if is_bad_candidate_term(term):
-            continue
+# ============================================================
+# 10. NER + NORMALIZACIÓN DE ENTIDADES
+# ============================================================
 
-        yake_scores[term] += (1.0 / (score + 1e-9))
-
-yake_top = yake_scores.most_common(1000)
-
-# NER
 ENTITY_STOP = {
     "chile", "santiago", "valparaíso", "concepción",
     "lunes", "martes", "miércoles", "jueves", "viernes",
     "mayo", "abril", "junio",
-    "bío bío", "bio bio", "el mostrador"
+    "bío bío", "bio bio", "el mostrador",
 }
 
-nlp = spacy.load("es_core_news_lg")
-ents = Counter()
-for doc in nlp.pipe(texts, batch_size=32):
-    for e in doc.ents:
-        ent_text = clean(e.text)
+ENTITY_ALIASES = {
+    "eeuu": "estados_unidos",
+    "ee.uu.": "estados_unidos",
+    "estados unidos": "estados_unidos",
+    "estados_unidos": "estados_unidos",
 
-        if not ent_text or ent_text in ENTITY_STOP:
-            continue
+    "trump": "donald_trump",
+    "donald trump": "donald_trump",
+    "donald_trump": "donald_trump",
 
-        if len(ent_text) < 3:
-            continue
+    "kast": "jose_antonio_kast",
+    "josé antonio kast": "jose_antonio_kast",
+    "jose antonio kast": "jose_antonio_kast",
+    "jose_antonio_kast": "jose_antonio_kast",
 
-        if e.label_ in {"ORG", "PER", "LOC", "MISC"}:
-            ents[(ent_text, e.label_)] += 1
+    "banco central": "banco_central",
+    "banco_central": "banco_central",
 
-# Embeddings + clustering
+    "wall street": "wall_street",
+    "wall_street": "wall_street",
+
+    "estrecho de ormuz": "estrecho_de_ormuz",
+    "estrecho_de_ormuz": "estrecho_de_ormuz",
+}
+
+
+def normalize_entity_text(value: str) -> str:
+    value = clean(value)
+    return ENTITY_ALIASES.get(value, value)
+
+
+
+
+# ============================================================
+# 11. EMBEDDINGS + HDBSCAN
+# ============================================================
+
 def build_embedding_text(a: dict) -> str:
     """
     Texto más corto para embeddings.
@@ -811,50 +1177,12 @@ def build_embedding_text(a: dict) -> str:
     return txt[:1200]
 
 
-embedding_articles = []
-embedding_texts = []
-
-for a in articles:
-    # Si ya agregaste esta función, úsala.
-    # Sirve para excluir deportes, cultura, multimedia, opinión, cartas, etc.
-    if "should_use_for_financial_dictionary" in globals():
-        if not should_use_for_financial_dictionary(a):
-            continue
-
-    txt = build_embedding_text(a)
-
-    if txt and len(txt.split()) >= 5:
-        embedding_articles.append(a)
-        embedding_texts.append(txt)
 
 
-if embedding_texts:
-    model = SentenceTransformer(
-        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    )
+# ============================================================
+# 12. SALIDA AUDITABLE
+# ============================================================
 
-    emb = model.encode(
-        embedding_texts,
-        show_progress_bar=True,
-        normalize_embeddings=True,
-        batch_size=64,
-    )
-
-    clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=15,
-        min_samples=5,
-        metric="euclidean",
-        cluster_selection_method="eom",
-        prediction_data=False,
-    )
-
-    labels = clusterer.fit_predict(emb)
-
-else:
-    emb = np.array([])
-    labels = np.array([])
-
-#Test de salida
 def sample_records(records_source: list[dict], limit: int = 20) -> list[dict]:
     samples = []
 
@@ -868,64 +1196,31 @@ def sample_records(records_source: list[dict], limit: int = 20) -> list[dict]:
             "published_date": a.get("published_date", ""),
             "main_section": a.get("main_section", ""),
             "url": a.get("url", ""),
+
             "strict_score": info["strict_score"],
             "political_score": info["political_score"],
             "geopolitical_score": info["geopolitical_score"],
+            "social_noise_score": info["social_noise_score"],
+
             "market_hits": info["market_hits"],
             "fiscal_hits": info["fiscal_hits"],
             "company_hits": info["company_hits"],
             "commodity_hits": info["commodity_hits"],
             "political_hits": info["political_hits"],
             "geopolitical_hits": info["geopolitical_hits"],
+            "social_noise_hits": info["social_noise_hits"],
+
+            "ambiguous_market_hits": info.get("ambiguous_market_hits", []),
+            "amount_hits": info.get("amount_hits", []),
+            "energy_context_hits": info.get("energy_context_hits", []),
+            "has_market_context": info.get("has_market_context", False),
+            "has_amount_context": info.get("has_amount_context", False),
+            "has_energy_market_context": info.get("has_energy_market_context", False),
+            "has_geopolitical_market_context": info.get("has_geopolitical_market_context", False),
         })
 
     return samples
 
-# Salida
-out = {
-    "metadata": {
-        "articles_total": len(articles),
-        "texts_general_count": len(texts),
-        "financial_strict_count": len(financial_texts),
-        "political_risk_count": len(political_risk_texts),
-        "geopolitical_market_count": len(geopolitical_market_texts),
-        "stopwords_count": len(STOP),
-    },
-
-    "general": {
-        "ngrams_top": ngrams_top[:300],
-        "tfidf_top": tfidf_top[:300],
-        "yake_top": yake_top[:300],
-    },
-
-    "financial_strict": {
-        "count": len(financial_texts),
-        "ngrams_top": financial_ngrams_top[:300],
-        "tfidf_top": financial_tfidf_top[:300],
-        "samples": sample_records(financial_strict_records, limit=20),
-    },
-
-    "political_risk": {
-        "count": len(political_risk_texts),
-        "ngrams_top": political_risk_ngrams_top[:300],
-        "tfidf_top": political_risk_tfidf_top[:300],
-        "samples": sample_records(political_risk_records, limit=20),
-    },
-
-    "geopolitical_market": {
-        "count": len(geopolitical_market_texts),
-        "ngrams_top": geopolitical_market_ngrams_top[:300],
-        "tfidf_top": geopolitical_market_tfidf_top[:300],
-        "samples": sample_records(geopolitical_market_records, limit=20),
-    },
-
-    "entities_top": [
-        {"text": k[0], "label": k[1], "count": v}
-        for k, v in ents.most_common(300)
-    ],
-
-    "clusters": Counter(labels.tolist()) if len(labels) else {},
-}
 
 
 def make_json_serializable(obj):
@@ -959,7 +1254,213 @@ def make_json_serializable(obj):
 
     return obj
 
-out_serializable = make_json_serializable(out)
 
-with open("candidatos_diccionario.json", "w", encoding="utf-8") as f:
-    json.dump(out_serializable, f, ensure_ascii=False, indent=2)
+def main() -> None:
+    # ============================================================
+    # 5. CARGA Y CONSTRUCCIÓN DE TEXTOS
+    # ============================================================
+
+    data = json.load(open("noticias_unificadas.txt", encoding="utf-8"))
+    articles = data["articles"] if isinstance(data, dict) else data
+
+    # ============================================================
+    # 7. REGISTROS POR FAMILIA
+    # ============================================================
+
+    records, record_stats = build_records_parallel(
+        articles,
+        max_workers=DEFAULT_RECORD_WORKERS,
+        log_every=RECORD_LOG_EVERY,
+        chunksize=RECORD_CHUNKSIZE,
+    )
+
+    texts = [r["text"] for r in records]
+
+    financial_strict_records = [
+        r for r in records
+        if r["family_info"]["is_financial_strict"]
+           and not r["family_info"]["is_social_noise_dominant"]
+    ]
+
+    political_risk_records = [
+        r for r in records
+        if r["family_info"]["is_political_risk"]
+           and not r["family_info"]["is_social_noise_dominant"]
+    ]
+
+    geopolitical_market_records = [
+        r for r in records
+        if r["family_info"]["is_geopolitical_market"]
+           and not r["family_info"]["is_social_noise_dominant"]
+    ]
+
+    financial_texts = [r["text"] for r in financial_strict_records]
+    political_risk_texts = [r["text"] for r in political_risk_records]
+    geopolitical_market_texts = [r["text"] for r in geopolitical_market_records]
+
+    print(f"Textos generales usados: {len(texts)}")
+    print(f"Textos financieros estrictos: {len(financial_texts)}")
+    print(f"Textos riesgo político: {len(political_risk_texts)}")
+    print(f"Textos geopolíticos con mercado: {len(geopolitical_market_texts)}")
+
+    ### 8 ####
+    financial_ngrams_top = extract_ngrams(financial_texts, min_df=3)
+    political_risk_ngrams_top = extract_ngrams(political_risk_texts, min_df=3)
+    geopolitical_market_ngrams_top = extract_ngrams(geopolitical_market_texts, min_df=3)
+
+    financial_tfidf_top = extract_tfidf(financial_texts, min_df=3)
+    political_risk_tfidf_top = extract_tfidf(political_risk_texts, min_df=3)
+    geopolitical_market_tfidf_top = extract_tfidf(geopolitical_market_texts, min_df=3)
+
+    ngrams_top = extract_ngrams(texts, min_df=5)
+    tfidf_top = extract_tfidf(texts, min_df=3)
+
+    #### 9 ####
+    kw = yake.KeywordExtractor(lan="es", n=3, top=20)
+    yake_scores = Counter()
+
+    for txt in texts:
+        for term, score in kw.extract_keywords(txt):
+            term = clean(term)
+
+            if is_bad_candidate_term(term):
+                continue
+
+            yake_scores[term] += (1.0 / (score + 1e-9))
+
+    yake_top = yake_scores.most_common(1000)
+
+    ### 10 - Normalize ###
+    nlp = spacy.load("es_core_news_lg")
+    ents = Counter()
+
+    for doc in nlp.pipe(texts, batch_size=32):
+        for e in doc.ents:
+            ent_text = normalize_entity_text(e.text)
+
+            if not ent_text or ent_text in ENTITY_STOP:
+                continue
+
+            if len(ent_text) < 3:
+                continue
+
+            if e.label_ in {"ORG", "PER", "LOC", "MISC"}:
+                ents[(ent_text, e.label_)] += 1
+
+
+    ### 11 Embeding ###
+    embedding_articles = []
+    embedding_texts = []
+
+    for a in articles:
+        if not should_use_for_financial_dictionary(a):
+            continue
+
+        txt = build_embedding_text(a)
+
+        if txt and len(txt.split()) >= 5:
+            embedding_articles.append(a)
+            embedding_texts.append(txt)
+
+    if embedding_texts:
+        model = SentenceTransformer(
+            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        )
+
+        emb = model.encode(
+            embedding_texts,
+            show_progress_bar=True,
+            normalize_embeddings=True,
+            batch_size=64,
+        )
+
+        clusterer = hdbscan.HDBSCAN(
+            min_cluster_size=15,
+            min_samples=5,
+            metric="euclidean",
+            cluster_selection_method="eom",
+            prediction_data=False,
+        )
+
+        labels = clusterer.fit_predict(emb)
+
+    else:
+        emb = np.array([])
+        labels = np.array([])
+
+    cluster_examples = defaultdict(list)
+
+    if len(labels):
+        for label, article, txt in zip(labels, embedding_articles, embedding_texts):
+            label = str(label)
+
+            if len(cluster_examples[label]) >= 10:
+                continue
+
+            cluster_examples[label].append({
+                "title": article.get("title", ""),
+                "source": article.get("source", ""),
+                "published_date": article.get("published_date", ""),
+                "main_section": article.get("main_section", ""),
+                "url": article.get("url", ""),
+                "text_preview": txt[:300],
+            })
+
+    #### 12 OUT ###
+    out = {
+        "metadata": {
+            "articles_total": len(articles),
+            "texts_general_count": len(texts),
+            "financial_strict_count": len(financial_texts),
+            "political_risk_count": len(political_risk_texts),
+            "geopolitical_market_count": len(geopolitical_market_texts),
+            "stopwords_count": len(STOP),
+            "record_processing_stats": dict(record_stats),
+            "record_workers": DEFAULT_RECORD_WORKERS,
+            "record_chunksize": RECORD_CHUNKSIZE,
+        },
+
+        "general": {
+            "ngrams_top": ngrams_top[:300],
+            "tfidf_top": tfidf_top[:300],
+            "yake_top": yake_top[:300],
+        },
+
+        "financial_strict": {
+            "count": len(financial_texts),
+            "ngrams_top": financial_ngrams_top[:300],
+            "tfidf_top": financial_tfidf_top[:300],
+            "samples": sample_records(financial_strict_records, limit=20),
+        },
+
+        "political_risk": {
+            "count": len(political_risk_texts),
+            "ngrams_top": political_risk_ngrams_top[:300],
+            "tfidf_top": political_risk_tfidf_top[:300],
+            "samples": sample_records(political_risk_records, limit=20),
+        },
+
+        "geopolitical_market": {
+            "count": len(geopolitical_market_texts),
+            "ngrams_top": geopolitical_market_ngrams_top[:300],
+            "tfidf_top": geopolitical_market_tfidf_top[:300],
+            "samples": sample_records(geopolitical_market_records, limit=20),
+        },
+
+        "entities_top": [
+            {"text": k[0], "label": k[1], "count": v}
+            for k, v in ents.most_common(300)
+        ],
+
+        "clusters": Counter(labels.tolist()) if len(labels) else {},
+        "cluster_examples": dict(cluster_examples),
+    }
+
+    out_serializable = make_json_serializable(out)
+
+    with open("candidatos_diccionario.json", "w", encoding="utf-8") as f:
+        json.dump(out_serializable, f, ensure_ascii=False, indent=2)
+
+
+if __name__ == "__main__":
+    main()
