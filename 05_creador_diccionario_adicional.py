@@ -112,6 +112,7 @@ CUSTOM_STOPWORDS = {
     "cosas","realidad","tomar","entrega","conjunto","cumplir","conocido",
     "representa","recibió","incluye","apunta","revisar","principalmente",
     "posibles","ambas","dejar","recibir","máximo","diversas",
+    "donald","josé","jose","antonio",
 }
 
 STOP = set(SPACY_STOPWORDS) | CUSTOM_STOPWORDS
@@ -465,6 +466,90 @@ ENERGY_CONTEXT_SEEDS = {
     "opep",
 }
 
+# Contextos geopolíticos duros: indican evento internacional con potencial de mercado.
+# No incluye "estados_unidos" ni "donald_trump" porque pueden aparecer en noticias
+# internacionales no financieras.
+GEOPOLITICAL_HARD_EVENT_SEEDS = {
+    "irán",
+    "iran",
+    "israel",
+    "rusia",
+    "ucrania",
+    "china",
+    "guerra",
+    "conflicto",
+    "estrecho_de_ormuz",
+    "estrecho de ormuz",
+    "aranceles",
+}
+
+# Contextos de mercado suficientemente fuertes.
+# Si una noticia geopolítica contiene alguno de estos, puede entrar a geopolitical_market.
+GEOPOLITICAL_MARKET_DIRECT_CONTEXT_SEEDS = {
+    "petróleo",
+    "petroleo",
+    "opep",
+    "estrecho_de_ormuz",
+    "estrecho de ormuz",
+    "aranceles",
+    "sanciones económicas",
+    "sanciones economicas",
+    "sanciones comerciales",
+    "sanciones financieras",
+    "sanciones internacionales",
+    "exportaciones",
+    "importaciones",
+    "cadena de suministro",
+    "wall_street",
+    "wall street",
+    "bolsa",
+    "dólar",
+    "dolar",
+    "tipo_de_cambio",
+    "tipo de cambio",
+}
+
+# Contextos de apoyo: son útiles, pero no deben activar la familia por sí solos.
+# Requieren al menos dos señales geopolíticas duras.
+GEOPOLITICAL_MARKET_SUPPORT_CONTEXT_SEEDS = {
+    "precios",
+    "comercio",
+    "mercado",
+    "dólares",
+    "dolares",
+    "millones",
+    "sanciones",
+}
+
+# Contextos fuertes para que "gas" cuente como señal geopolítica de mercado.
+# No incluye "guerra" ni "conflicto", porque esas palabras pueden aparecer en sentido
+# local, político o metafórico y producir falsos positivos.
+GAS_GEOPOLITICAL_STRONG_CONTEXT_SEEDS = {
+    "rusia",
+    "ucrania",
+    "irán",
+    "iran",
+    "israel",
+    "china",
+    "estados_unidos",
+    "donald_trump",
+    "sanciones económicas",
+    "sanciones economicas",
+    "sanciones comerciales",
+    "sanciones financieras",
+    "sanciones internacionales",
+    "opep",
+    "estrecho_de_ormuz",
+    "estrecho de ormuz",
+}
+
+# Contextos débiles para "gas".
+# Sirven solo si además existe un contexto directo fuerte de mercado/geopolítica.
+GAS_GEOPOLITICAL_WEAK_CONTEXT_SEEDS = {
+    "guerra",
+    "conflicto",
+}
+
 
 # ============================================================
 # 4. LIMPIEZA Y NORMALIZACIÓN
@@ -480,11 +565,19 @@ def clean(text: str) -> str:
     text = unicodedata.normalize("NFKC", text).lower()
 
     # Normaliza frases compuestas antes de tokenizar.
+    # Normaliza frases compuestas antes de tokenizar.
     for phrase, replacement in PHRASE_NORMALIZATIONS.items():
         text = text.replace(phrase, replacement)
-        text = re.sub(r"\btrump\b", "donald_trump", text)
-        text = re.sub(r"\bkast\b", "jose_antonio_kast", text)
 
+    # Normalización contextual de apellidos políticos frecuentes.
+    # Esto debe ir FUERA del for anterior, para no ejecutarlo una vez por cada frase.
+    text = re.sub(r"\btrump\b", "donald_trump", text)
+    text = re.sub(r"\bkast\b", "jose_antonio_kast", text)
+
+    # Corrige duplicados generados por formas como "Donald, Trump" o "José Antonio, Kast".
+    text = re.sub(r"\bdonald\s+donald_trump\b", "donald_trump", text)
+    text = re.sub(r"\bjos[eé]\s+antonio\s+jose_antonio_kast\b", "jose_antonio_kast", text)
+    text = re.sub(r"\bantonio\s+jose_antonio_kast\b", "jose_antonio_kast", text)
     # Boilerplate BioBio / El Mostrador
     boilerplate_patterns = [
         r"ver resumen",
@@ -551,6 +644,26 @@ def clean(text: str) -> str:
     meses = (
         "enero|febrero|marzo|abril|mayo|junio|julio|agosto|"
         "septiembre|setiembre|octubre|noviembre|diciembre"
+    )
+    text = re.sub(
+        r"\bpol[íi]tica\s+pol[íi]ticas(?:\s+p[úu]blicas)?\b",
+        " ",
+        text,
+        flags=re.I,
+    )
+
+    text = re.sub(
+        r"\bpol[íi]ticas\s+p[úu]blicas\b",
+        " ",
+        text,
+        flags=re.I,
+    )
+
+    text = re.sub(
+        r"\bpol[íi]tica\s+pol[íi]tica\b",
+        " ",
+        text,
+        flags=re.I,
     )
     text = re.sub(rf"\b\d{{1,2}}\s+({meses})\s+\d{{4}}\b", " ", text)
     text = re.sub(rf"\b({meses})\s+\d{{4}}\b", " ", text)
@@ -660,11 +773,21 @@ def contains_seed(text: str, seed: str) -> bool:
 
 def seed_hits(text: str, seeds: set[str]) -> set[str]:
     """
-    Devuelve las semillas encontradas en el texto.
+    Devuelve las semillas encontradas en el texto, normalizadas.
+    Esto evita contar varias veces alias equivalentes como:
+    'eeuu', 'ee.uu.' y 'estados unidos'.
     """
     text = clean(text)
-    return {seed for seed in seeds if contains_seed(text, seed)}
 
+    hits = set()
+
+    for seed in seeds:
+        normalized_seed = clean(seed)
+
+        if normalized_seed and contains_seed(text, seed):
+            hits.add(normalized_seed)
+
+    return hits
 
 def has_market_context(text: str) -> bool:
     """
@@ -685,11 +808,6 @@ def has_ambiguous_market_signal(text: str) -> bool:
     return bool(ambiguous_hits) and has_market_context(text)
 
 def has_amount_context(text: str) -> bool:
-    """
-    Permite considerar montos como millones, pesos o dólares solo si
-    aparecen junto a señales económicas, financieras, fiscales,
-    empresariales o de commodities.
-    """
     text = clean(text)
 
     amount_hits = seed_hits(text, AMOUNT_SEEDS)
@@ -697,9 +815,49 @@ def has_amount_context(text: str) -> bool:
     if not amount_hits:
         return False
 
-    context_hits = seed_hits(text, AMOUNT_CONTEXT_SEEDS)
+    strong_context_hits = seed_hits(text, {
+        "hacienda",
+        "ministerio_de_hacienda",
+        "ministro_de_hacienda",
+        "presupuesto",
+        "deficit_fiscal",
+        "gasto_fiscal",
+        "politica_fiscal",
+        "subsidio_electrico",
+        "banco_central",
+        "mercado_financiero",
+        "wall_street",
+        "bolsa",
+        "bonos",
+        "renta_fija",
+        "renta_variable",
+        "tipo_de_cambio",
+        "tasa_de_interes",
+        "ipc",
+        "inflación",
+        "inflacion",
+        "codelco",
+        "enap",
+        "sqm",
+        "copec",
+        "falabella",
+        "cencosud",
+        "ingresos",
+        "utilidades",
+        "ganancias",
+        "pérdidas",
+        "perdidas",
+        "deuda",
+        "financiamiento",
+        "cobre",
+        "litio",
+        "petróleo",
+        "petroleo",
+        "gas",
+    })
 
-    return bool(context_hits)
+    # No basta con "empresa", "inversión" o "mercado" como contexto débil.
+    return bool(strong_context_hits)
 
 
 def has_energy_market_context(text: str) -> bool:
@@ -719,46 +877,88 @@ def has_energy_market_context(text: str) -> bool:
     return has_energy_word and has_context
 
 
+def has_geopolitical_gas_context(text: str) -> bool:
+    """
+    Considera 'gas' como señal geopolítica de mercado solo si aparece
+    con contexto internacional duro.
+
+    'guerra' o 'conflicto' solos no bastan, porque pueden aparecer en
+    noticias locales, políticas o en sentido metafórico.
+    """
+    text = clean(text)
+
+    if not contains_seed(text, "gas"):
+        return False
+
+    strong_hits = seed_hits(text, GAS_GEOPOLITICAL_STRONG_CONTEXT_SEEDS)
+    weak_hits = seed_hits(text, GAS_GEOPOLITICAL_WEAK_CONTEXT_SEEDS)
+
+    # Caso fuerte: gas + Rusia/Ucrania/Irán/Ormuz/OPEP/sanciones internacionales/etc.
+    if strong_hits:
+        return True
+
+    # Caso débil: gas + guerra/conflicto solo cuenta si además hay una señal directa
+    # fuerte de mercado/geopolítica, como petróleo, OPEP, Ormuz, aranceles, dólar,
+    # exportaciones, importaciones, bolsa, Wall Street o cadena de suministro.
+    direct_hits = seed_hits(text, GEOPOLITICAL_MARKET_DIRECT_CONTEXT_SEEDS)
+
+    if weak_hits and direct_hits:
+        return True
+
+    return False
+
 def has_geopolitical_market_context(text: str) -> bool:
     """
     Determina si una noticia geopolítica tiene contexto económico,
     comercial, energético, financiero o de commodities.
+
+    Regla:
+    - Señales fuertes como petróleo, OPEP, Ormuz, sanciones,
+      aranceles, dólar, bolsa o cadena de suministro activan contexto.
+    - Señales débiles como precios, comercio, mercado, dólares o millones
+      solo activan contexto si hay al menos dos señales geopolíticas duras.
     """
     text = clean(text)
 
-    market_or_commodity_context = (
-        bool(seed_hits(text, MARKET_STRICT_SEEDS))
-        or bool(seed_hits(text, COMMODITY_STRICT_SEEDS))
-        or has_amount_context(text)
-        or has_energy_market_context(text)
-    )
+    hard_geo_hits = seed_hits(text, GEOPOLITICAL_HARD_EVENT_SEEDS)
+    direct_context_hits = seed_hits(text, GEOPOLITICAL_MARKET_DIRECT_CONTEXT_SEEDS)
+    support_context_hits = seed_hits(text, GEOPOLITICAL_MARKET_SUPPORT_CONTEXT_SEEDS)
 
-    direct_context = any(
-        contains_seed(text, seed)
-        for seed in {
-            "aranceles",
-            "sanciones",
-            "comercio",
-            "petróleo",
-            "petroleo",
-            "gas",
-            "dólar",
-            "dolar",
-            "wall_street",
-            "wall street",
-            "bolsa",
-            "opep",
-            "estrecho_de_ormuz",
-            "estrecho de ormuz",
-            "precios",
-            "exportaciones",
-            "importaciones",
-            "suministro",
-            "cadena de suministro",
-        }
-    )
+    market_hits = seed_hits(text, MARKET_STRICT_SEEDS)
+    commodity_hits = seed_hits(text, COMMODITY_STRICT_SEEDS)
+    commodity_hits_without_gas = commodity_hits - {"gas"}
 
-    return market_or_commodity_context or direct_context
+    # 1. Contexto directo fuerte: petróleo, dólar, OPEP, Ormuz,
+    # sanciones económicas, aranceles, exportaciones, importaciones, Wall Street, etc.
+    if direct_context_hits:
+        return True
+
+    # 1.b. Gas solo cuenta si tiene contexto geopolítico duro.
+    if has_geopolitical_gas_context(text):
+        return True
+
+    # 2. Commodities o energía en contexto real:
+    # debe haber al menos una señal geopolítica dura.
+    # "gas" se excluye de este gatillo general, porque tiene su propia regla contextual.
+    if (commodity_hits_without_gas or has_energy_market_context(text)) and hard_geo_hits:
+        return True
+
+    # 3. Mercado financiero estricto:
+    # también requiere señal geopolítica dura.
+    if market_hits and hard_geo_hits:
+        return True
+
+    # 4. Montos con contexto:
+    # para evitar falsos positivos, exige al menos dos señales geopolíticas duras.
+    if has_amount_context(text) and len(hard_geo_hits) >= 2:
+        return True
+
+    # 5. Contextos débiles como precios/comercio/mercado/dólares/millones:
+    # solo entran si hay al menos dos señales geopolíticas duras.
+    if support_context_hits and len(hard_geo_hits) >= 2:
+        return True
+
+    return False
 
 def classify_text_families(text: str) -> dict:
     """
@@ -783,8 +983,7 @@ def classify_text_families(text: str) -> dict:
     if has_ambiguous_market_signal(text):
         market_hits = market_hits | ambiguous_market_hits
 
-    if has_amount_context(text):
-        market_hits = market_hits | amount_hits
+    amount_context_ok = has_amount_context(text)
 
     # Agrega energía solo si aparece en contexto energético real.
     if has_energy_market_context(text):
@@ -795,13 +994,20 @@ def classify_text_families(text: str) -> dict:
             + len(fiscal_hits) * 3
             + len(company_hits) * 3
             + len(commodity_hits) * 3
+            + (1 if amount_context_ok else 0)
     )
 
     political_score = len(political_hits)
     geopolitical_score = len(geopolitical_hits)
     social_noise_score = len(social_noise_hits)
 
-    is_financial_strict = strict_score >= 3
+    is_financial_strict = (
+            strict_score >= 4
+            or len(fiscal_hits) > 0
+            or len(company_hits) > 0
+            or len(commodity_hits) > 0
+            or len(market_hits) >= 2
+    )
 
     is_political_risk = (
             political_score >= 2
@@ -813,9 +1019,11 @@ def classify_text_families(text: str) -> dict:
             )
     )
 
+    geopolitical_market_context_ok = has_geopolitical_market_context(text)
+
     is_geopolitical_market = (
             geopolitical_score >= 1
-            and has_geopolitical_market_context(text)
+            and geopolitical_market_context_ok
     )
 
     is_social_noise_dominant = (
@@ -847,9 +1055,16 @@ def classify_text_families(text: str) -> dict:
         "amount_hits": sorted(amount_hits),
         "energy_context_hits": sorted(energy_context_hits),
         "has_market_context": has_market_context(text),
-        "has_amount_context": has_amount_context(text),
+        "has_amount_context": amount_context_ok,
         "has_energy_market_context": has_energy_market_context(text),
-        "has_geopolitical_market_context": has_geopolitical_market_context(text),
+        "has_geopolitical_market_context": geopolitical_market_context_ok,
+        "has_geopolitical_gas_context": has_geopolitical_gas_context(text),
+        "geopolitical_gas_strong_context_hits": sorted(seed_hits(text, GAS_GEOPOLITICAL_STRONG_CONTEXT_SEEDS)),
+        "geopolitical_gas_weak_context_hits": sorted(seed_hits(text, GAS_GEOPOLITICAL_WEAK_CONTEXT_SEEDS)),
+        "geopolitical_hard_event_hits": sorted(seed_hits(text, GEOPOLITICAL_HARD_EVENT_SEEDS)),
+        "geopolitical_direct_context_hits": sorted(seed_hits(text, GEOPOLITICAL_MARKET_DIRECT_CONTEXT_SEEDS)),
+        "geopolitical_support_context_hits": sorted(seed_hits(text, GEOPOLITICAL_MARKET_SUPPORT_CONTEXT_SEEDS)),
+
     }
 
 
@@ -1217,6 +1432,12 @@ def sample_records(records_source: list[dict], limit: int = 20) -> list[dict]:
             "has_amount_context": info.get("has_amount_context", False),
             "has_energy_market_context": info.get("has_energy_market_context", False),
             "has_geopolitical_market_context": info.get("has_geopolitical_market_context", False),
+            "has_geopolitical_gas_context": info.get("has_geopolitical_gas_context", False),
+            "geopolitical_gas_strong_context_hits": info.get("geopolitical_gas_strong_context_hits", []),
+            "geopolitical_gas_weak_context_hits": info.get("geopolitical_gas_weak_context_hits", []),
+            "geopolitical_hard_event_hits": info.get("geopolitical_hard_event_hits", []),
+            "geopolitical_direct_context_hits": info.get("geopolitical_direct_context_hits", []),
+            "geopolitical_support_context_hits": info.get("geopolitical_support_context_hits", []),
         })
 
     return samples
