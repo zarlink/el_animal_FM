@@ -1655,6 +1655,55 @@ def build_date_range(end_date: date, days_count: int) -> list[date]:
     return [end_date - timedelta(days=i) for i in range(days_count)]
 
 
+def get_day_dir(base_dir: Path, target: date) -> Path:
+    """Devuelve la carpeta diaria donde se guarda la descarga de una fecha."""
+    return base_dir / "biobio" / date_dir_name(target)
+
+
+def get_day_output_path(base_dir: Path, target: date) -> Path:
+    """Devuelve el archivo principal esperado para una fecha."""
+    return get_day_dir(base_dir, target) / "noticias_dia.txt"
+
+
+def should_skip_existing_day(
+    base_dir: Path,
+    target: date,
+    overwrite_existing: bool = False,
+) -> bool:
+    """
+    Decide si una fecha debe omitirse.
+
+    Regla incremental:
+    - Si la carpeta biobio/DD_MM_YYYY ya existe, se considera ya trabajada.
+    - Por defecto no se toca ni se sobrescribe.
+    - Si overwrite_existing=True, se fuerza la redescarga.
+    """
+    if overwrite_existing:
+        return False
+
+    return get_day_dir(base_dir, target).exists()
+
+
+def build_skipped_day_summary(base_dir: Path, target: date) -> dict[str, Any]:
+    """
+    Construye una entrada de resumen para días omitidos por existir previamente.
+    No modifica la carpeta ni sus archivos.
+    """
+    day_dir = get_day_dir(base_dir, target)
+    output_path = get_day_output_path(base_dir, target)
+    raw_html_dir = day_dir / "html"
+
+    return {
+        "target_date": target.isoformat(),
+        "status": "skipped_existing_day",
+        "reason": "La carpeta diaria ya existe y overwrite_existing=False.",
+        "day_dir": str(day_dir),
+        "output_path": str(output_path),
+        "output_exists": output_path.exists(),
+        "html_dir_exists": raw_html_dir.exists(),
+    }
+
+
 def scrape_single_day(
     session: requests.Session,
     target: date,
@@ -1858,6 +1907,15 @@ def main() -> None:
         help="Número de noticias a descargar en paralelo por día. Usa 1 para modo secuencial.",
     )
 
+    parser.add_argument(
+        "--overwrite-existing",
+        action="store_true",
+        help=(
+            "Si se indica, vuelve a descargar días cuya carpeta ya existe. "
+            "Por defecto, las carpetas existentes se omiten y se dejan intactas."
+        ),
+    )
+
     args = parser.parse_args()
 
     end_date = parse_target_date(args.date)
@@ -1876,10 +1934,36 @@ def main() -> None:
     print(f"Primera fecha a procesar: {targets[0].isoformat()}")
     print(f"Última fecha a procesar: {targets[-1].isoformat()}")
     print(f"Directorio base: {base_dir}")
+    print(f"Sobrescribir carpetas existentes: {args.overwrite_existing}")
+
+    existing_targets = [
+        target for target in targets
+        if get_day_dir(base_dir, target).exists()
+    ]
+    pending_targets = [
+        target for target in targets
+        if not get_day_dir(base_dir, target).exists() or args.overwrite_existing
+    ]
+
+    print(f"Días ya existentes: {len(existing_targets)}")
+    print(f"Días pendientes de descarga: {len(pending_targets)}")
 
     global_summary: list[dict[str, Any]] = []
 
     for target in targets:
+        if should_skip_existing_day(
+            base_dir=base_dir,
+            target=target,
+            overwrite_existing=args.overwrite_existing,
+        ):
+            skipped_summary = build_skipped_day_summary(base_dir, target)
+            print(
+                f"[SKIP] {target.isoformat()} | "
+                f"carpeta existente: {skipped_summary['day_dir']}"
+            )
+            global_summary.append(skipped_summary)
+            continue
+
         try:
             summary = scrape_single_day(
                 session=session,
@@ -1890,12 +1974,14 @@ def main() -> None:
                 max_category_pages=args.max_category_pages,
                 article_workers=args.article_workers
             )
+            summary["status"] = "downloaded"
             global_summary.append(summary)
         except Exception as exc:
             print(f"[ERROR] Falló la descarga del día {target.isoformat()}: {exc}")
             global_summary.append(
                 {
                     "target_date": target.isoformat(),
+                    "status": "error",
                     "error": str(exc),
                 }
             )
@@ -1908,9 +1994,16 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    downloaded_days = sum(1 for item in global_summary if item.get("status") == "downloaded")
+    skipped_days = sum(1 for item in global_summary if item.get("status") == "skipped_existing_day")
+    error_days = sum(1 for item in global_summary if item.get("status") == "error")
+
     print("\n" + "=" * 70)
     print("PROCESO GENERAL TERMINADO")
-    print(f"Días procesados: {len(global_summary)}")
+    print(f"Días en rango: {len(global_summary)}")
+    print(f"Días descargados: {downloaded_days}")
+    print(f"Días omitidos por existir: {skipped_days}")
+    print(f"Días con error: {error_days}")
     print(f"Resumen general guardado en: {summary_path}")
     print("=" * 70)
 

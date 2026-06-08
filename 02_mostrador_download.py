@@ -2095,6 +2095,55 @@ def build_date_range(end_date: date, days_count: int) -> list[date]:
     return [end_date - timedelta(days=i) for i in range(days_count)]
 
 
+def get_day_dir(base_dir: Path, target: date) -> Path:
+    """Devuelve la carpeta diaria donde se guarda la descarga de una fecha."""
+    return base_dir / "mostrador" / date_dir_name(target)
+
+
+def get_day_output_path(base_dir: Path, target: date) -> Path:
+    """Devuelve el archivo principal esperado para una fecha."""
+    return get_day_dir(base_dir, target) / "noticias_dia.txt"
+
+
+def should_skip_existing_day(
+    base_dir: Path,
+    target: date,
+    overwrite_existing: bool = False,
+) -> bool:
+    """
+    Decide si una fecha debe omitirse.
+
+    Regla incremental:
+    - Si la carpeta mostrador/DD_MM_YYYY ya existe, se considera ya trabajada.
+    - Por defecto no se toca ni se sobrescribe.
+    - Si overwrite_existing=True, se fuerza la redescarga.
+    """
+    if overwrite_existing:
+        return False
+
+    return get_day_dir(base_dir, target).exists()
+
+
+def build_skipped_day_summary(base_dir: Path, target: date) -> dict[str, Any]:
+    """
+    Construye una entrada de resumen para días omitidos por existir previamente.
+    No modifica la carpeta ni sus archivos.
+    """
+    day_dir = get_day_dir(base_dir, target)
+    output_path = get_day_output_path(base_dir, target)
+    raw_html_dir = day_dir / "html"
+
+    return {
+        "target_date": target.isoformat(),
+        "status": "skipped_existing_day",
+        "reason": "La carpeta diaria ya existe y overwrite_existing=False.",
+        "day_dir": str(day_dir),
+        "output_path": str(output_path),
+        "output_exists": output_path.exists(),
+        "html_dir_exists": raw_html_dir.exists(),
+    }
+
+
 def scrape_single_day(
     session: requests.Session,
     target: date,
@@ -2105,9 +2154,9 @@ def scrape_single_day(
     preloaded_categoria: dict[str, DiscoveredUrl] | None = None,
     article_workers: int = 8,
 ) -> dict[str, Any]:
-    day_dir = base_dir / "mostrador" / date_dir_name(target)
+    day_dir = get_day_dir(base_dir, target)
     raw_html_dir = day_dir / "html"
-    output_path = day_dir / "noticias_dia.txt"
+    output_path = get_day_output_path(base_dir, target)
 
     day_dir.mkdir(parents=True, exist_ok=True)
     raw_html_dir.mkdir(parents=True, exist_ok=True)
@@ -2308,6 +2357,15 @@ def main() -> None:
         help="Número de noticias a descargar en paralelo por día. Usa 1 para modo secuencial.",
     )
 
+    parser.add_argument(
+        "--overwrite-existing",
+        action="store_true",
+        help=(
+            "Si se indica, vuelve a descargar días cuya carpeta ya existe. "
+            "Por defecto, las carpetas existentes se omiten y se dejan intactas."
+        ),
+    )
+
     args = parser.parse_args()
 
     end_date = parse_target_date(args.date)
@@ -2327,20 +2385,42 @@ def main() -> None:
     print(f"Última fecha a procesar: {targets[-1].isoformat()}")
     print(f"Directorio base: {base_dir}")
 
-    preloaded_categoria_by_date: dict[date, dict[str, DiscoveredUrl]] | None = None
-
-    if len(targets) > 1:
-        print()
-        print("Precargando /categoria/dia/ para todo el rango...")
-        preloaded_categoria_by_date = discover_from_categoria_dia_range(
-            session=session,
-            targets=targets,
-            max_pages=args.max_category_pages,
-        )
-
     global_summary: list[dict[str, Any]] = []
+    targets_to_download: list[date] = []
 
     for target in targets:
+        if should_skip_existing_day(
+            base_dir=base_dir,
+            target=target,
+            overwrite_existing=args.overwrite_existing,
+        ):
+            skipped_summary = build_skipped_day_summary(base_dir, target)
+            print(
+                f"[SKIP] {target.isoformat()} | "
+                f"carpeta existente: {skipped_summary['day_dir']}"
+            )
+            global_summary.append(skipped_summary)
+        else:
+            targets_to_download.append(target)
+
+    preloaded_categoria_by_date: dict[date, dict[str, DiscoveredUrl]] | None = None
+
+    if len(targets_to_download) > 1:
+        print()
+        print(
+            "Precargando /categoria/dia/ para los días faltantes del rango "
+            f"({len(targets_to_download)} días por descargar)..."
+        )
+        preloaded_categoria_by_date = discover_from_categoria_dia_range(
+            session=session,
+            targets=targets_to_download,
+            max_pages=args.max_category_pages,
+        )
+    elif len(targets_to_download) == 0:
+        print()
+        print("No hay días nuevos por descargar. Todas las carpetas del rango ya existen.")
+
+    for target in targets_to_download:
         try:
             preloaded_categoria = (
                 preloaded_categoria_by_date.get(target, {})
@@ -2358,12 +2438,14 @@ def main() -> None:
                 preloaded_categoria=preloaded_categoria,
                 article_workers=args.article_workers,
             )
+            summary["status"] = "downloaded"
             global_summary.append(summary)
         except Exception as exc:
             print(f"[ERROR] Falló la descarga del día {target.isoformat()}: {exc}")
             global_summary.append(
                 {
                     "target_date": target.isoformat(),
+                    "status": "error",
                     "error": str(exc),
                 }
             )
@@ -2377,8 +2459,15 @@ def main() -> None:
     )
 
     print("\n" + "=" * 70)
+    downloaded_count = sum(1 for item in global_summary if item.get("status") == "downloaded")
+    skipped_count = sum(1 for item in global_summary if item.get("status") == "skipped_existing_day")
+    error_count = sum(1 for item in global_summary if item.get("status") == "error")
+
     print("PROCESO GENERAL TERMINADO")
-    print(f"Días procesados: {len(global_summary)}")
+    print(f"Días en rango: {len(targets)}")
+    print(f"Días descargados: {downloaded_count}")
+    print(f"Días omitidos por existir: {skipped_count}")
+    print(f"Días con error: {error_count}")
     print(f"Resumen general guardado en: {summary_path}")
     print("=" * 70)
 
