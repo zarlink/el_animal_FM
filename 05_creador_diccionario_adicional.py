@@ -11,6 +11,7 @@ import time
 import hdbscan
 import numpy as np
 import spacy
+import torch
 import yake
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
@@ -1584,6 +1585,8 @@ def main() -> None:
             embedding_texts.append(txt)
 
     if embedding_texts:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
         model = SentenceTransformer(
             "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
         )
@@ -1592,7 +1595,7 @@ def main() -> None:
             embedding_texts,
             show_progress_bar=True,
             normalize_embeddings=True,
-            batch_size=64,
+            batch_size=128 if device == "cuda" else 64,
         )
 
         clusterer = hdbscan.HDBSCAN(
