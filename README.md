@@ -1,61 +1,71 @@
-# Scraper y Pipeline de Noticias para Análisis de Volatilidad
+# Scraper y Pipeline de Noticias para Analisis de Volatilidad
 
-Este repositorio descarga noticias desde medios digitales chilenos, normaliza el texto, consolida el corpus y genera candidatos de diccionario para clasificar noticias según su posible relación con mercados, riesgo político, indicadores macroeconómicos, empresas, commodities y volatilidad.
+Este proyecto descarga noticias de medios chilenos, las normaliza, consolida un corpus comun, genera candidatos para diccionarios tematicos y enriquece cada noticia con features heuristicas orientadas a analisis financiero, riesgo politico, commodities, instituciones, geopolitica y volatilidad.
 
-Actualmente el flujo considera dos fuentes principales:
+El flujo actual trabaja con dos fuentes principales de noticias:
 
 | Medio | Carpeta de salida | Estado |
 | --- | --- | --- |
 | BioBioChile | `biobio/` | Implementado |
 | El Mostrador | `mostrador/` | Implementado |
 
-La finalidad del proyecto es transformar noticias publicadas diariamente en datos estructurados que puedan ser usados posteriormente como entrada para clasificadores heurísticos, modelos NLP, modelos clásicos de machine learning o modelos predictivos asociados a volatilidad de instrumentos financieros.
+Ademas existe un complemento separado para descargar cartolas diarias de fondos desde CMF hacia `downloads/`. Ese complemento no es requisito para crear ni enriquecer noticias, pero puede servir despues para cruzar senales noticiosas con series financieras.
 
 ---
 
-## Menú
+## Menu
 
-* [1. Objetivo general](#1-objetivo-general)
-* [2. Flujo del pipeline](#2-flujo-del-pipeline)
-* [3. Scripts principales](#3-scripts-principales)
-* [4. Instalación y dependencias](#4-instalación-y-dependencias)
-* [5. Ejecución recomendada](#5-ejecución-recomendada)
-* [6. Estructura del repositorio](#6-estructura-del-repositorio)
-* [7. Fuente 1: BioBioChile](#7-fuente-1-biobiochile)
-* [8. Fuente 2: El Mostrador](#8-fuente-2-el-mostrador)
-* [9. Formato de salida diario](#9-formato-de-salida-diario)
-* [10. Normalización de noticias](#10-normalización-de-noticias)
-* [11. Unificación del corpus](#11-unificación-del-corpus)
-* [12. Creación de candidatos de diccionario](#12-creación-de-candidatos-de-diccionario)
-* [13. Diccionarios temáticos](#13-diccionarios-temáticos)
-* [14. Estado actual de datos generados](#14-estado-actual-de-datos-generados)
-* [15. Exclusiones actuales](#15-exclusiones-actuales)
-* [16. Uso futuro de los datos](#16-uso-futuro-de-los-datos)
-* [17. Etapas futuras](#17-etapas-futuras)
-* [18. Consideración metodológica](#18-consideración-metodológica)
+* [1. Objetivo](#1-objetivo)
+* [2. Razonamiento de esta documentacion](#2-razonamiento-de-esta-documentacion)
+* [3. Flujo principal](#3-flujo-principal)
+* [4. Scripts](#4-scripts)
+* [5. Instalacion](#5-instalacion)
+* [6. Ejecucion recomendada](#6-ejecucion-recomendada)
+* [7. Estructura esperada](#7-estructura-esperada)
+* [8. Fuentes de noticias](#8-fuentes-de-noticias)
+* [9. Formatos de salida](#9-formatos-de-salida)
+* [10. Diccionarios y enriquecimiento](#10-diccionarios-y-enriquecimiento)
+* [11. Datos generados](#11-datos-generados)
+* [12. Complementos](#12-complementos)
+* [13. Consideraciones metodologicas](#13-consideraciones-metodologicas)
 
 ---
 
-## 1. Objetivo general
+## 1. Objetivo
 
-El objetivo principal es construir una base histórica de noticias chilenas e internacionales publicadas por medios locales, con suficiente estructura y limpieza para analizar su posible relación con variables financieras.
+El objetivo es transformar noticias publicadas diariamente en datos estructurados y auditables para construir variables que luego puedan relacionarse con mercado, riesgo politico, volatilidad, commodities, empresas, instituciones y fondos financieros.
 
 El proyecto busca:
 
-1. Descargar noticias por fecha y por medio.
-2. Guardar HTML crudo para auditoría posterior.
-3. Extraer campos estructurados desde cada artículo.
-4. Reparar problemas de encoding, HTML residual y ruido editorial.
-5. Unificar noticias de distintas fuentes en un solo corpus.
-6. Construir textos de clasificación a partir de título, bajada, resumen y cuerpo.
-7. Extraer candidatos de diccionario mediante frecuencia, TF-IDF, YAKE, entidades, embeddings y clustering.
-8. Preparar insumos para clasificadores financieros y modelos predictivos.
+1. Descargar noticias por fecha y fuente.
+2. Guardar HTML crudo para auditoria.
+3. Extraer campos estructurados desde cada articulo.
+4. Reparar encoding, HTML residual y ruido editorial.
+5. Unificar noticias de distintas fuentes en un corpus comun.
+6. Crear textos de clasificacion a partir de titulo, bajada, resumen y cuerpo.
+7. Extraer candidatos de diccionario con frecuencia, TF-IDF, YAKE, entidades, embeddings y clustering.
+8. Enriquecer las noticias diarias con familias tematicas, puntajes y senales de impacto potencial.
+9. Preparar insumos para reglas heuristicas, modelos NLP, modelos clasicos de machine learning o modelos predictivos.
 
 ---
 
-## 2. Flujo del pipeline
+## 2. Razonamiento de esta documentacion
 
-El flujo actual del proyecto es:
+La actualizacion del README se basa en revisar los archivos Python numerados que ejecutan acciones concretas. El criterio fue separar:
+
+| Tipo | Criterio usado | Scripts |
+| --- | --- | --- |
+| Pipeline principal de noticias | Produce o transforma `noticias_dia.txt`, `noticias_unificadas.txt`, `candidatos_diccionario.json` o `noticias_dia_enriquecidas.txt`. | `01` a `06` |
+| Herramienta alternativa | Apoya una fuente ya existente, pero no reemplaza el flujo principal. | `07` |
+| Complemento financiero | Descarga series externas para uso posterior, no procesa noticias. | `08` |
+
+La justificacion es que el proyecto ya no termina en `05_creador_diccionario_adicional.py`. El script `06_enriquecer_noticias.py` recorre las carpetas diarias, carga diccionarios curados, puede incorporar candidatos automaticos y escribe `noticias_dia_enriquecidas.txt` sin destruir el archivo original. Por eso el README debe describir el enriquecimiento como una etapa actual, no futura.
+
+Tambien es importante no sobredimensionar `05`: ese script no genera un clasificador final. Genera candidatos exploratorios para revision y para alimentar parcialmente `06`. El enriquecimiento usa semillas propias, archivos en `diccionarios/` y, salvo `--no-candidates`, tambien `candidatos_diccionario.json`.
+
+---
+
+## 3. Flujo principal
 
 ```text
 01_biobio_download.py
@@ -76,27 +86,38 @@ noticias_unificadas.txt
    ↓
 candidatos_diccionario.json
    ↓
-diccionarios/*.txt
+diccionarios/*.txt + semillas internas de 06
+   ↓
+06_enriquecer_noticias.py
+   ↓
+biobio/DD_MM_YYYY/noticias_dia_enriquecidas.txt
+mostrador/DD_MM_YYYY/noticias_dia_enriquecidas.txt
+features_summary/resumen_enriquecimiento_*.json
 ```
 
-Los scripts `01` y `02` generan datos por fuente y fecha. El script `03` repara y limpia los textos. El script `04` reduce y consolida los registros en un único archivo. El script `05` analiza el corpus y produce candidatos para diccionarios temáticos.
+El pipeline tiene dos niveles:
+
+* Corpus y diccionario: `01` a `05` construyen la base historica y candidatos.
+* Features por noticia: `06` aplica diccionarios y reglas para dejar cada noticia enriquecida.
 
 ---
 
-## 3. Scripts principales
+## 4. Scripts
 
-| Script | Función | Entrada | Salida |
+| Script | Funcion | Entrada | Salida |
 | --- | --- | --- | --- |
-| `01_biobio_download.py` | Descarga noticias de BioBioChile por rango de días. | BioBioChile. | `biobio/DD_MM_YYYY/noticias_dia.txt`, HTML crudo y resumen de descarga. |
-| `02_mostrador_download.py` | Descarga noticias de El Mostrador por rango de días. | El Mostrador. | `mostrador/DD_MM_YYYY/noticias_dia.txt`, HTML crudo y resumen de descarga. |
-| `03_normalizador_noticias.py` | Repara textos, elimina ruido y recalcula métricas del cuerpo. | `noticias_dia.txt` por medio y fecha. | Archivos normalizados y respaldo `.bak`. |
-| `04_unificador_noticias_diccionario.py` | Unifica noticias normalizadas en un corpus reducido. | Carpetas `biobio/` y `mostrador/`. | `noticias_unificadas.txt`. |
-| `05_creador_diccionario_adicional.py` | Analiza el corpus y genera candidatos para diccionarios. | `noticias_unificadas.txt`. | `candidatos_diccionario.json`. |
-| `cmf_download_10063_CB.py` | Descarga información CMF asociada a fondos o series financieras. | CMF. | Archivos en `downloads/`. |
+| `01_biobio_download.py` | Descarga noticias de BioBioChile por fecha o rango. | BioBioChile: sitemap, Lo Ultimo y archivos de categorias. | `biobio/DD_MM_YYYY/noticias_dia.txt`, HTML crudo y resumen de descarga. |
+| `02_mostrador_download.py` | Descarga noticias de El Mostrador por fecha o rango. | El Mostrador: home, `/dia/`, `/categoria/dia/`, secciones y sitemaps. | `mostrador/DD_MM_YYYY/noticias_dia.txt`, HTML crudo y resumen de descarga. |
+| `03_normalizador_noticias.py` | Repara texto, elimina ruido y recalcula metricas. | `noticias_dia.txt` por medio y fecha. | Archivo normalizado y respaldo `.bak`; opcionalmente `noticias_dia_normalizado.txt`. |
+| `04_unificador_noticias_diccionario.py` | Reduce y unifica noticias en un corpus comun. | Carpetas `biobio/` y `mostrador/`. | `noticias_unificadas.txt`. |
+| `05_creador_diccionario_adicional.py` | Extrae candidatos de diccionario desde el corpus. | `noticias_unificadas.txt`. | `candidatos_diccionario.json`. |
+| `06_enriquecer_noticias.py` | Aplica diccionarios, candidatos y semillas para enriquecer noticias. | `noticias_dia.txt`, `diccionarios/`, `candidatos_diccionario.json`. | `noticias_dia_enriquecidas.txt` y resumen en `features_summary/`. |
+| `07_download_biobio_from_google.py` | Busca noticias historicas de BioBio mediante Google y reutiliza el parser de `01`. | Google + `01_biobio_download.py`. | Actualiza/mezcla `biobio/DD_MM_YYYY/noticias_dia.txt` y genera resumen Google. |
+| `08_descarga_fondos_mutuos.py` | Descarga cartola diaria CMF para fondos configurados. | CMF, con CAPTCHA manual. | Archivos por fondo en `downloads/` y resumen CMF. |
 
 ---
 
-## 4. Instalación y dependencias
+## 5. Instalacion
 
 Crear y activar un entorno virtual:
 
@@ -111,26 +132,19 @@ Instalar dependencias:
 pip install -r requirements.txt
 ```
 
-El archivo `requirements.txt` incluye dependencias de scraping, limpieza, NLP y clustering, entre ellas:
+Dependencias relevantes:
 
-* `requests`
-* `beautifulsoup4`
-* `lxml`
-* `python-dateutil`
-* `spacy`
-* `es_core_news_lg`
-* `scikit-learn`
-* `sentence-transformers`
-* `hdbscan`
-* `yake`
+* Scraping y parsing: `requests`, `beautifulsoup4`, `lxml`, `python-dateutil`.
+* NLP y diccionarios: `spacy`, `es_core_news_lg`, `yake`, `scikit-learn`.
+* Embeddings y clustering: `sentence-transformers`, `torch`, `hdbscan`.
 
-El script `05_creador_diccionario_adicional.py` requiere más recursos que los scrapers, porque carga spaCy, modelos de embeddings y ejecuta clustering.
+El script `05_creador_diccionario_adicional.py` es el mas pesado: carga spaCy, embeddings y clustering. Puede usar GPU si `torch.cuda.is_available()` devuelve verdadero.
 
 ---
 
-## 5. Ejecución recomendada
+## 6. Ejecucion recomendada
 
-Ejemplo para descargar y procesar un rango de 45 días terminando el `2026-06-02`:
+Ejemplo para procesar 45 dias terminando el `2026-06-02`:
 
 ```bash
 python 01_biobio_download.py --date 2026-06-02 --days-back 45
@@ -138,37 +152,48 @@ python 02_mostrador_download.py --date 2026-06-02 --days-back 45
 python 03_normalizador_noticias.py
 python 04_unificador_noticias_diccionario.py
 python 05_creador_diccionario_adicional.py
+python 06_enriquecer_noticias.py --date 2026-06-02 --days-back 45 --overwrite
 ```
 
-Opciones útiles de los descargadores:
+Opciones utiles de los descargadores `01` y `02`:
 
-| Opción | Descripción |
+| Opcion | Descripcion |
 | --- | --- |
-| `--date` | Fecha final del rango. Acepta `DD_MM_YYYY`, `DD-MM-YYYY` o `YYYY-MM-DD`. |
-| `--days-back` | Cantidad total de días hacia atrás, incluyendo la fecha final. |
+| `--date` | Fecha final. Acepta `DD_MM_YYYY`, `DD-MM-YYYY` o `YYYY-MM-DD`. |
+| `--days-back` | Cantidad de dias hacia atras, incluyendo la fecha final. |
 | `--base-dir` | Directorio base del proyecto. Por defecto, `.`. |
-| `--max-articles` | Límite de noticias por día para pruebas. `0` significa sin límite. |
+| `--max-articles` | Limite de noticias por dia para pruebas. `0` significa sin limite. |
 | `--sleep` | Pausa entre descargas. |
-| `--max-category-pages` | Máximo de páginas de archivo o categoría a revisar. |
-| `--article-workers` | Número de noticias a descargar en paralelo por día. |
+| `--max-category-pages` | Maximo de paginas de archivo, categoria o seccion a revisar. |
+| `--article-workers` | Numero de noticias a descargar en paralelo por dia. |
 
-El normalizador permite evitar sobrescritura:
+Normalizar sin sobrescribir:
 
 ```bash
 python 03_normalizador_noticias.py --no-overwrite
 ```
 
-El unificador permite cambiar medios o salida:
+Unificar solo algunos medios:
 
 ```bash
 python 04_unificador_noticias_diccionario.py --media biobio mostrador --output noticias_unificadas.txt
 ```
 
+Enriquecer un rango especifico:
+
+```bash
+python 06_enriquecer_noticias.py --date-from 2026-05-01 --date-to 2026-06-02 --workers 4 --overwrite
+```
+
+Enriquecer sin usar candidatos automaticos:
+
+```bash
+python 06_enriquecer_noticias.py --no-candidates
+```
+
 ---
 
-## 6. Estructura del repositorio
-
-Estructura principal esperada:
+## 7. Estructura esperada
 
 ```text
 el_animal_FM/
@@ -177,11 +202,14 @@ el_animal_FM/
 ├── 03_normalizador_noticias.py
 ├── 04_unificador_noticias_diccionario.py
 ├── 05_creador_diccionario_adicional.py
-├── cmf_download_10063_CB.py
+├── 06_enriquecer_noticias.py
+├── 07_download_biobio_from_google.py
+├── 08_descarga_fondos_mutuos.py
 ├── requirements.txt
 ├── README.md
 ├── noticias_unificadas.txt
 ├── candidatos_diccionario.json
+├── resumen_historial_noticias.json
 ├── diccionarios/
 │   ├── mercado_volatilidad_v1.txt
 │   ├── commodities_clima_v1.txt
@@ -191,9 +219,11 @@ el_animal_FM/
 │   └── macro_indicadoresV1.txt
 ├── biobio/
 │   ├── resumen_descarga_DD_MM_YYYY_N_dias.txt
+│   ├── resumen_google_biobio_v3_DD_MM_YYYY_N_dias.txt
 │   └── DD_MM_YYYY/
 │       ├── noticias_dia.txt
 │       ├── noticias_dia.txt.bak
+│       ├── noticias_dia_enriquecidas.txt
 │       └── html/
 │           └── *.html
 ├── mostrador/
@@ -201,92 +231,61 @@ el_animal_FM/
 │   └── DD_MM_YYYY/
 │       ├── noticias_dia.txt
 │       ├── noticias_dia.txt.bak
+│       ├── noticias_dia_enriquecidas.txt
 │       └── html/
 │           └── *.html
+├── features_summary/
+│   └── resumen_enriquecimiento_*.json
 └── downloads/
-    └── *.txt
+    ├── resumen_cmf_*.json
+    └── */cmf_*.txt
 ```
-
-Las carpetas `biobio/` y `mostrador/` contienen datos descargados por fecha. El archivo `noticias_unificadas.txt` es el corpus consolidado. El archivo `candidatos_diccionario.json` contiene salidas del análisis automático. La carpeta `diccionarios/` guarda diccionarios temáticos curados o en proceso de curaduría.
 
 ---
 
-## 7. Fuente 1: BioBioChile
+## 8. Fuentes de noticias
 
-BioBioChile se descarga con `01_biobio_download.py`.
+### BioBioChile
 
-La estrategia de descubrimiento combina:
+`01_biobio_download.py` usa:
 
 * `news-sitemap.xml`.
-* Página `lo-ultimo.shtml`.
-* Archivos de categorías.
-* Paginación por categorías.
+* Sitemap mensual `static/sitemap-YYYY-MM.xml`.
+* Pagina `lo-ultimo.shtml`.
+* Archivos de categorias.
+* API de categorias/paginacion.
 
-El scraper privilegia URLs de noticias escritas que:
+Filtra principalmente URLs que:
 
 * pertenezcan a `biobiochile.cl`;
 * terminen en `.shtml`;
 * contengan `/noticias/`;
 * coincidan con la fecha objetivo en la ruta.
 
-Categorías base consideradas:
-
-* Nacional.
-* Internacional.
-* Economía.
-* Deportes.
-* Sociedad.
-* Espectáculos y TV.
-* Opinión.
-* BBCL Investiga.
-
-El parser actual se identifica como:
+Tambien excluye rutas como BioBioTV, podcasts, programas, especiales y paginas legales. El parser actual se identifica como:
 
 ```text
 biobio_raw_v3_category_archives
 ```
 
----
+### El Mostrador
 
-## 8. Fuente 2: El Mostrador
+`02_mostrador_download.py` usa:
 
-El Mostrador se descarga con `02_mostrador_download.py`.
-
-La estrategia de descubrimiento combina:
-
-* Página principal.
+* Pagina principal.
 * `/dia/`.
 * `/categoria/dia/`.
-* Paginación de `/categoria/dia/page/N/`.
+* Paginacion de `/categoria/dia/page/N/`.
 * Secciones editoriales.
 * Sitemaps candidatos.
 
-El scraper acepta principalmente URLs que contienen una fecha en el patrón:
+Acepta principalmente URLs con fecha en la ruta:
 
 ```text
 /YYYY/MM/DD/
 ```
 
-Secciones base consideradas:
-
-* País.
-* Mundo.
-* Sin editar.
-* Mercados.
-* Actualidad económica.
-* Opinión.
-* Columnas.
-* Cartas.
-* Editorial.
-* TV.
-* Multimedia.
-* Cultura.
-* Agenda País.
-* Agenda.
-* Braga.
-* Deportes.
-
-El parser actual se identifica como:
+Excluye paginas de autor, tags, newsletter, paginas institucionales, privacidad, contacto, categorias sin noticia especifica y paginaciones internas. El parser actual se identifica como:
 
 ```text
 elmostrador_raw_v2_range_sections
@@ -294,9 +293,11 @@ elmostrador_raw_v2_range_sections
 
 ---
 
-## 9. Formato de salida diario
+## 9. Formatos de salida
 
-Cada `noticias_dia.txt` es un JSON con metadatos y artículos:
+### Archivo diario
+
+Cada `noticias_dia.txt` es JSON:
 
 ```json
 {
@@ -316,141 +317,56 @@ Cada `noticias_dia.txt` es un JSON con metadatos y artículos:
 }
 ```
 
-El bloque `raw` contiene información observable de la noticia:
+`raw` contiene campos observables de la noticia: URL, fecha, hora, titulo, subtitulo, resumen, cuerpo, autor, seccion, indicadores de contenido, enlaces relacionados e imagenes cuando se detectan.
 
-* URL original y URL canónica.
-* Fecha y hora de publicación.
-* Título, subtítulo, bajada, resumen y cuerpo.
-* Autoría.
-* Sección editorial.
-* Indicadores de tipo de contenido.
-* Enlaces relacionados.
-* Imágenes, video o audio cuando se detectan.
+`technical` conserva auditoria: codigo HTTP, tipo de contenido, HTML local, version del parser, estado de parsing, errores y fuentes de descubrimiento.
 
-El bloque `technical` contiene información de auditoría:
+### Corpus unificado
 
-* Código HTTP.
-* Tipo de contenido.
-* Ruta local del HTML.
-* Versión del parser.
-* Estado de parsing.
-* Errores o advertencias.
-* Fuentes de descubrimiento.
+`04_unificador_noticias_diccionario.py` genera `noticias_unificadas.txt` con:
+
+* `metadata`: informacion general de generacion.
+* `files_summary`: resumen por archivo diario.
+* `articles`: noticias reducidas.
+
+Cada articulo unificado conserva campos como `source`, `source_file`, `published_date`, `url`, `main_section`, `title`, `summary`, `body_text_clean`, `classification_text`, `parser_version`, `parse_success` y `parse_errors`.
+
+`classification_text` combina titulo, subtitulo, bajada, resumen, resumen IA y cuerpo limpio. Es la base para `05`.
 
 ---
 
-## 10. Normalización de noticias
+## 10. Diccionarios y enriquecimiento
 
-El script `03_normalizador_noticias.py` procesa los archivos `noticias_dia.txt` de `biobio/` y `mostrador/`.
+### Candidatos automaticos
 
-La normalización realiza:
+`05_creador_diccionario_adicional.py` lee `noticias_unificadas.txt` y escribe `candidatos_diccionario.json`.
 
-* Reparación de mojibake, por ejemplo `dÃ©ficit` a `déficit`.
-* Decodificación de entidades HTML.
-* Eliminación de HTML residual.
-* Eliminación de ruido editorial y boilerplate.
-* Limpieza de listas de textos relacionados.
-* Reconstrucción de párrafos.
-* Recalculo de `paragraph_count`.
-* Recalculo de `body_length_chars`.
-* Recalculo de `body_length_words`.
-* Marcado de metadatos con `text_normalized` y `text_normalizer_version`.
+El analisis incluye:
 
-Por defecto sobrescribe el archivo original y crea un respaldo `.bak` si no existe. Con `--no-overwrite`, genera un archivo `noticias_dia_normalizado.txt`.
-
-Esta etapa no convierte todo a ASCII. El objetivo es conservar texto en UTF-8 correctamente legible, manteniendo acentos y caracteres propios del español cuando correspondan.
-
----
-
-## 11. Unificación del corpus
-
-El script `04_unificador_noticias_diccionario.py` recorre las carpetas de medios, busca directorios con formato `DD_MM_YYYY` y carga cada `noticias_dia.txt`.
-
-La salida principal es:
-
-```text
-noticias_unificadas.txt
-```
-
-Este archivo contiene:
-
-* `metadata`: información general de generación.
-* `files_summary`: resumen por archivo diario procesado.
-* `articles`: noticias reducidas y listas para análisis.
-
-Cada artículo unificado conserva campos como:
-
-* `source`
-* `source_file`
-* `published_date`
-* `published_time`
-* `url`
-* `canonical_url`
-* `main_section`
-* `subsection`
-* `title`
-* `subtitle`
-* `lead`
-* `summary`
-* `ai_summary`
-* `body_text_clean`
-* `classification_text`
-* `classification_text_length`
-* `parser_version`
-* `parse_success`
-* `parse_errors`
-
-El campo `classification_text` combina título, subtítulo, bajada, resumen y cuerpo limpio. Es el texto base para extracción de palabras clave y construcción de diccionarios.
-
----
-
-## 12. Creación de candidatos de diccionario
-
-El script `05_creador_diccionario_adicional.py` lee:
-
-```text
-noticias_unificadas.txt
-```
-
-y escribe:
-
-```text
-candidatos_diccionario.json
-```
-
-El análisis incluye:
-
-* Limpieza adicional de texto.
 * Stopwords de spaCy y stopwords personalizadas.
-* Normalización de frases compuestas, como `banco central`, `wall street`, `tipo de cambio` o `déficit fiscal`.
-* Clasificación heurística preliminar por familias.
-* Extracción de n-grams.
-* Extracción TF-IDF.
-* Extracción de keywords con YAKE.
-* Extracción de entidades con `es_core_news_lg`.
-* Embeddings multilingües con `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`.
+* Normalizacion de frases compuestas como `banco central`, `wall street`, `tipo de cambio` y `deficit fiscal`.
+* Filtros heuristicos para textos financieros, riesgo politico y geopolitica con mercado.
+* N-grams, TF-IDF y keywords YAKE.
+* Entidades con `es_core_news_lg`.
+* Embeddings multilingues con `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`.
 * Clustering con HDBSCAN.
-* Muestras por familia temática para revisión manual.
+* Muestras para auditoria manual.
 
-Familias principales generadas:
+Secciones principales del JSON:
 
-| Familia | Descripción |
+| Seccion | Uso |
 | --- | --- |
-| `general` | Términos frecuentes del corpus completo. |
-| `financial_strict` | Noticias con señales financieras, macro, mercado, empresas o commodities. |
-| `political_risk` | Noticias con señales de riesgo político, institucional, fiscal o regulatorio. |
-| `geopolitical_market` | Noticias geopolíticas con posible vínculo de mercado. |
+| `general` | Terminos frecuentes del corpus completo. |
+| `financial_strict` | Candidatos financieros, macro, mercado, empresas o commodities. |
+| `political_risk` | Candidatos politicos, fiscales, institucionales o regulatorios. |
+| `geopolitical_market` | Candidatos geopoliticos con posible vinculo de mercado. |
 | `entities_top` | Entidades detectadas por spaCy. |
-| `clusters` | Grupos semánticos detectados por embeddings y HDBSCAN. |
-| `cluster_examples` | Ejemplos por cluster para auditoría. |
+| `clusters` | Grupos semanticos detectados. |
+| `cluster_examples` | Ejemplos por cluster. |
 
----
+### Diccionarios curados
 
-## 13. Diccionarios temáticos
-
-La carpeta `diccionarios/` contiene archivos destinados a consolidar términos curados a partir de `candidatos_diccionario.json`.
-
-Archivos actuales:
+La carpeta `diccionarios/` contiene terminos revisables y versionables:
 
 ```text
 diccionarios/
@@ -462,97 +378,113 @@ diccionarios/
 └── macro_indicadoresV1.txt
 ```
 
-Estos archivos representan categorías reutilizables para una etapa posterior de clasificación. La idea es revisar los candidatos automáticos, seleccionar términos útiles y poblar estos diccionarios con versiones trazables.
+`06_enriquecer_noticias.py` infiere la familia desde el nombre de archivo y acepta `.txt`, `.csv` y `.json`. En archivos de texto, cada linea puede ser un termino simple o un termino con peso separado por coma o punto y coma.
+
+### Enriquecimiento diario
+
+`06_enriquecer_noticias.py` carga:
+
+* semillas internas (`DEFAULT_SEED_TERMS`);
+* archivos de `diccionarios/`;
+* candidatos de `candidatos_diccionario.json`, salvo que se use `--no-candidates`.
+
+Luego agrega a cada articulo un bloque `features` con:
+
+* `families`: puntajes, hits y detalles por familia tematica;
+* `general_classification`: banderas como `is_economic_news`, `is_political_news`, `is_market_news`, `is_social_noise`;
+* `impact`: `market_impact_candidate`, `market_impact_score`, direccion esperada, horizonte, riesgo, incertidumbre y confianza;
+* `entities`: terminos relevantes detectados, como `has_banco_central`, `has_cmf`, `has_codelco`, `has_china`;
+* `temporal`: fecha, hora, dia de semana y fin de semana;
+* `audit`: familias activas, terminos encontrados y razon textual de clasificacion.
+
+Familias usadas por `06`:
+
+| Familia | Sentido |
+| --- | --- |
+| `macro_fiscal` | Hacienda, presupuesto, deficit, impuestos, deuda publica. |
+| `mercado_financiero` | Banco Central, CMF, dolar, tasas, IPC, bolsa, bonos. |
+| `energia_commodities` | Petroleo, cobre, litio, combustibles, electricidad, ENAP, Codelco. |
+| `empresas_instituciones` | Empresas, bancos, CMF, Banco Central e instituciones relevantes. |
+| `politico_regulatorio` | Congreso, ley, regulacion, reformas, gobierno. |
+| `geopolitico_mercado` | Guerras, sanciones, aranceles, China, EE.UU., Rusia, Iran, cadenas de suministro. |
+| `riesgo_alerta` | Crisis, incertidumbre, caida, emergencia, quiebra. |
+| `sentimiento_positivo` | Crecimiento, alza, recuperacion, acuerdo, inversion. |
+| `sentimiento_negativo` | Caida, baja, crisis, desaceleracion, perdidas. |
+| `ruido_social` | Farandula, deportes, policial, musica, cine y otros ruidos no financieros. |
 
 ---
 
-## 14. Estado actual de datos generados
+## 11. Datos generados
 
-El corpus unificado actual registra:
+Metricas recalculadas desde los archivos actuales:
 
-| Archivo | Métrica | Valor |
+| Archivo | Metrica | Valor |
 | --- | --- | --- |
 | `noticias_unificadas.txt` | Archivos diarios procesados | 90 |
 | `noticias_unificadas.txt` | Noticias unificadas | 4.736 |
-| `candidatos_diccionario.json` | Artículos totales | 4.736 |
-| `candidatos_diccionario.json` | Textos útiles para análisis general | 3.757 |
+| `candidatos_diccionario.json` | Articulos totales | 4.736 |
+| `candidatos_diccionario.json` | Textos utiles para analisis general | 3.757 |
 | `candidatos_diccionario.json` | Textos financieros estrictos | 819 |
-| `candidatos_diccionario.json` | Textos de riesgo político | 477 |
-| `candidatos_diccionario.json` | Textos geopolíticos con contexto de mercado | 333 |
+| `candidatos_diccionario.json` | Textos de riesgo politico | 477 |
+| `candidatos_diccionario.json` | Textos geopoliticos con contexto de mercado | 333 |
+| `biobio/*/noticias_dia_enriquecidas.txt` | Archivos enriquecidos existentes | 411 |
+| `mostrador/*/noticias_dia_enriquecidas.txt` | Archivos enriquecidos existentes | 320 |
 
-También existen resúmenes de descarga por rango:
+Resumenes existentes relevantes:
 
 ```text
+biobio/resumen_descarga_11_06_2026_5_dias.txt
 biobio/resumen_descarga_02_06_2026_45_dias.txt
+biobio/resumen_google_biobio_v3_30_03_2026_1000_dias.txt
+mostrador/resumen_descarga_11_06_2026_5_dias.txt
 mostrador/resumen_descarga_02_06_2026_45_dias.txt
+mostrador/resumen_descarga_09_06_2026_1000_dias.txt
+features_summary/resumen_enriquecimiento_*.json
 ```
 
 ---
 
-## 15. Exclusiones actuales
+## 12. Complementos
 
-El scraper busca excluir contenidos que puedan contaminar la base principal de noticias escritas.
+### BioBio historico desde Google
 
-En BioBioChile se excluyen, entre otros:
+`07_download_biobio_from_google.py` es una herramienta auxiliar para encontrar noticias historicas de BioBio cuando los mecanismos normales no cubren bien ciertas fechas. Reutiliza `01_biobio_download.py` como parser mediante `--parser-file`.
 
-* Podcasts.
-* BioBioTV.
-* Programas.
-* Especiales no noticiosos.
-* Páginas legales.
-* Contenido que no esté bajo `/noticias/`.
+Ejemplo:
 
-En El Mostrador se excluyen páginas que no correspondan a noticias individuales:
+```bash
+python 07_download_biobio_from_google.py --start-date 2026-04-30 --days-back 30 --max-google-pages 5
+```
 
-* Páginas de autor.
-* Tags.
-* Newsletter.
-* Páginas institucionales.
-* Páginas de privacidad o contacto.
-* Paginaciones internas.
-* Categorías sin noticia específica.
+Puede usar proxies y rotacion de fingerprint. Sus pausas por defecto son deliberadamente largas porque consulta Google.
 
-Además, el análisis de diccionarios excluye o reduce peso de contenidos como deportes, cultura, multimedia, opinión, cartas y editoriales cuando no son útiles para el diccionario financiero.
+### Fondos mutuos CMF
 
----
+`08_descarga_fondos_mutuos.py` descarga cartolas diarias de fondos en tramos de maximo 31 dias por solicitud. Requiere resolver CAPTCHA manualmente.
 
-## 16. Uso futuro de los datos
+Ejemplos:
 
-Los datos generados pueden alimentar una capa posterior de clasificación, con variables como:
+```bash
+python 08_descarga_fondos_mutuos.py --list-funds --list-filter itau
+python 08_descarga_fondos_mutuos.py --start-date 2025-04-04 --end-date 2026-06-10 --fund balanceado national_equity --skip-existing
+```
 
-* Si la noticia es económica, financiera, política, regulatoria, geopolítica o social.
-* Si tiene impacto potencial en mercado.
-* Qué familia temática domina.
-* Qué empresas, instituciones, países o sectores aparecen.
-* Qué instrumentos financieros podrían verse afectados.
-* Qué horizonte temporal podría tener el impacto.
-* Si el evento se asocia a volatilidad, riesgo fiscal, commodities, tasas, moneda, crédito o renta variable.
+Fondos configurados en el catalogo interno:
 
-Estas variables podrán correlacionarse con series financieras, fondos mutuos, valores cuota, índices o métricas de volatilidad.
+* `balanceado`
+* `national_equity`
+* `toesca_equity`
+* `itau_ahorro_uf`
+* `all`
 
 ---
 
-## 17. Etapas futuras
+## 13. Consideraciones metodologicas
 
-Las etapas pendientes más relevantes son:
+El pipeline actual recolecta, estructura, limpia, unifica y enriquece noticias, pero sus puntajes no deben interpretarse como predicciones financieras definitivas.
 
-1. Poblar y versionar los archivos de `diccionarios/` a partir de `candidatos_diccionario.json`.
-2. Crear un clasificador que use los diccionarios temáticos para etiquetar noticias nuevas.
-3. Diseñar reglas de scoring para intensidad, dirección e impacto esperado.
-4. Integrar series financieras descargadas desde CMF u otras fuentes.
-5. Generar variables agregadas por día, medio, familia temática y sector.
-6. Evaluar modelos clásicos de clasificación o regresión.
-7. Probar modelos NLP y embeddings para clasificación supervisada.
-8. Evaluar modelos predictivos como XGBoost o TFT.
-9. Agregar pruebas y validaciones automáticas de calidad del corpus.
-10. Medir cobertura diaria por fuente y detectar brechas de descarga.
+`candidatos_diccionario.json` es una salida exploratoria. Sirve para revisar terminos y poblar o ajustar diccionarios, no para aceptar automaticamente reglas de clasificacion.
 
----
+`noticias_dia_enriquecidas.txt` contiene features heuristicas utiles para analisis posterior, pero requiere validacion contra ejemplos reales y, si se usa para prediccion, contra series financieras externas.
 
-## 18. Consideración metodológica
-
-El pipeline actual recolecta, estructura, limpia y analiza noticias, pero todavía no debe interpretarse como un clasificador financiero definitivo.
-
-`candidatos_diccionario.json` es una salida exploratoria y debe ser revisada antes de convertirse en reglas de clasificación. Los diccionarios temáticos deben construirse con curaduría manual, control de versiones y validación contra ejemplos reales.
-
-La calidad de las etapas de descarga, normalización y unificación es crítica, porque cualquier modelo posterior dependerá directamente de la cobertura, consistencia y limpieza del corpus.
+La calidad de descarga, normalizacion y cobertura diaria sigue siendo critica: si una fuente omite fechas, extrae mal el cuerpo o introduce ruido editorial, cualquier diccionario o modelo posterior heredara ese problema.

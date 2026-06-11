@@ -2144,6 +2144,81 @@ def build_skipped_day_summary(base_dir: Path, target: date) -> dict[str, Any]:
     }
 
 
+def get_article_url_from_payload(article: dict[str, Any]) -> str:
+    """
+    Obtiene la URL principal de una noticia ya guardada.
+
+    Soporta la estructura actual:
+        {"raw": {"url": "...", "canonical_url": "..."}}
+
+    y también una estructura plana, por si en algún momento el payload cambia.
+    """
+    if not isinstance(article, dict):
+        return ""
+
+    raw = article.get("raw")
+    if isinstance(raw, dict):
+        return normalize_url(str(raw.get("canonical_url") or raw.get("url") or ""))
+
+    return normalize_url(str(article.get("canonical_url") or article.get("url") or ""))
+
+
+def load_existing_day_payload(output_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], set[str]]:
+    """
+    Carga noticias existentes desde noticias_dia.txt, si existe.
+
+    Devuelve:
+    - payload completo existente, o {} si no existe/no se puede leer
+    - lista de artículos existentes
+    - set de URLs existentes normalizadas
+    """
+    if not output_path.exists():
+        return {}, [], set()
+
+    try:
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[WARN] No se pudo leer archivo existente {output_path}: {exc}")
+        return {}, [], set()
+
+    articles = payload.get("articles", [])
+    if not isinstance(articles, list):
+        print(f"[WARN] Archivo existente sin lista válida de articles: {output_path}")
+        return payload, [], set()
+
+    existing_urls: set[str] = set()
+
+    for article in articles:
+        url = get_article_url_from_payload(article)
+        if url:
+            existing_urls.add(url)
+
+    return payload, articles, existing_urls
+
+
+def deduplicate_articles_by_url(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Elimina duplicados por URL/canonical_url preservando el primer registro encontrado.
+    """
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+
+    for article in articles:
+        url = get_article_url_from_payload(article)
+
+        if not url:
+            deduped.append(article)
+            continue
+
+        if url in seen:
+            continue
+
+        seen.add(url)
+        deduped.append(article)
+
+    return deduped
+
+
 def scrape_single_day(
     session: requests.Session,
     target: date,
@@ -2153,6 +2228,7 @@ def scrape_single_day(
     max_category_pages: int = DEFAULT_MAX_CATEGORY_PAGES,
     preloaded_categoria: dict[str, DiscoveredUrl] | None = None,
     article_workers: int = 8,
+    overwrite_existing: bool = False,
 ) -> dict[str, Any]:
     day_dir = get_day_dir(base_dir, target)
     raw_html_dir = day_dir / "html"
@@ -2160,6 +2236,13 @@ def scrape_single_day(
 
     day_dir.mkdir(parents=True, exist_ok=True)
     raw_html_dir.mkdir(parents=True, exist_ok=True)
+
+    existing_payload, existing_articles, existing_urls = load_existing_day_payload(output_path)
+
+    if overwrite_existing:
+        print("[INFO] overwrite_existing=True: se ignorará el archivo previo y se redescargarán las noticias detectadas.")
+        existing_articles = []
+        existing_urls = set()
 
     print("\n" + "=" * 70)
     print(f"Scraping El Mostrador para fecha: {target.isoformat()}")
@@ -2174,18 +2257,24 @@ def scrape_single_day(
         preloaded_categoria=preloaded_categoria,
     )
 
-    urls = list(discoveries.keys())
+    urls_detected = list(discoveries.keys())
 
     if max_articles and max_articles > 0:
-        urls = urls[:max_articles]
+        urls_detected = urls_detected[:max_articles]
+
+    urls = [
+        url for url in urls_detected
+        if normalize_url(url) not in existing_urls
+    ]
 
     print()
     print(f"Total de noticias detectadas para el día: {len(discoveries)}")
+    print(f"Noticias existentes en archivo del día: {len(existing_articles)}")
+    print(f"URLs existentes únicas: {len(existing_urls)}")
+    print(f"Noticias nuevas por descargar: {len(urls)}")
 
     if max_articles and max_articles > 0:
-        print(f"Modo prueba: se descargarán solo {len(urls)} noticias.")
-    else:
-        print(f"Se descargarán {len(urls)} noticias.")
+        print(f"Modo prueba activo: universo limitado a {len(urls_detected)} URLs detectadas.")
 
     print()
 
@@ -2266,39 +2355,63 @@ def scrape_single_day(
                     print(f"[{completed}/{len(urls)}] ERROR: {url} | {exc}")
                     articles[index] = build_parallel_error_article(url, exc)
 
-    articles = [article for article in articles if article is not None]
+    new_articles = [article for article in articles if article is not None]
+    combined_articles = deduplicate_articles_by_url(existing_articles + new_articles)
 
-    write_output(
-        output_path=output_path,
-        target=target,
-        discovered_count=len(discoveries),
-        articles=articles,
+    if new_articles or overwrite_existing or not output_path.exists():
+        write_output(
+            output_path=output_path,
+            target=target,
+            discovered_count=len(discoveries),
+            articles=combined_articles,
+        )
+        output_written = True
+    else:
+        output_written = False
+
+    successful_total = sum(
+        1 for a in combined_articles
+        if a.get("technical", {}).get("parse_success")
     )
+    failed_total = len(combined_articles) - successful_total
 
-    successful = sum(1 for a in articles if a.get("technical", {}).get("parse_success"))
-    failed = len(articles) - successful
+    successful_new = sum(
+        1 for a in new_articles
+        if a.get("technical", {}).get("parse_success")
+    )
+    failed_new = len(new_articles) - successful_new
 
     print()
     print("Resumen del día:")
     print(f"  Noticias detectadas: {len(discoveries)}")
-    print(f"  Noticias descargadas: {len(articles)}")
-    print(f"  Parseadas sin observaciones: {successful}")
-    print(f"  Con observaciones o errores: {failed}")
+    print(f"  Noticias existentes antes de ejecutar: {len(existing_articles)}")
+    print(f"  Noticias nuevas descargadas: {len(new_articles)}")
+    print(f"  Noticias totales guardadas sin duplicados: {len(combined_articles)}")
+    print(f"  Nuevas parseadas sin observaciones: {successful_new}")
+    print(f"  Nuevas con observaciones o errores: {failed_new}")
+    print(f"  Total parseadas sin observaciones: {successful_total}")
+    print(f"  Total con observaciones o errores: {failed_total}")
     print(f"  Archivo guardado en: {output_path}")
+    print(f"  Archivo actualizado: {output_written}")
 
     return {
         "target_date": target.isoformat(),
         "articles_found": len(discoveries),
-        "articles_downloaded": len(articles),
-        "parse_success": successful,
-        "parse_failed": failed,
+        "articles_existing_before": len(existing_articles),
+        "articles_new_downloaded": len(new_articles),
+        "articles_total_after_merge": len(combined_articles),
+        "parse_success_new": successful_new,
+        "parse_failed_new": failed_new,
+        "parse_success_total": successful_total,
+        "parse_failed_total": failed_total,
         "output_path": str(output_path),
+        "output_written": output_written,
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Descarga noticias de El Mostrador desde una fecha hacia atrás y guarda datos raw + technical."
+        description="Descarga/actualiza noticias de El Mostrador por rango de días, agregando solo URLs nuevas si el archivo diario ya existe."
     )
 
     parser.add_argument(
@@ -2361,8 +2474,8 @@ def main() -> None:
         "--overwrite-existing",
         action="store_true",
         help=(
-            "Si se indica, vuelve a descargar días cuya carpeta ya existe. "
-            "Por defecto, las carpetas existentes se omiten y se dejan intactas."
+            "Si se indica, ignora el noticias_dia.txt existente y redescarga todas las URLs detectadas. "
+            "Por defecto, si el archivo existe, conserva sus noticias y agrega solo URLs nuevas."
         ),
     )
 
@@ -2384,49 +2497,35 @@ def main() -> None:
     print(f"Primera fecha a procesar: {targets[0].isoformat()}")
     print(f"Última fecha a procesar: {targets[-1].isoformat()}")
     print(f"Directorio base: {base_dir}")
+    print(f"Sobrescribir archivo diario existente: {args.overwrite_existing}")
+
+    existing_file_targets = [
+        target for target in targets
+        if get_day_output_path(base_dir, target).exists()
+    ]
+
+    print(f"Días con noticias_dia.txt existente: {len(existing_file_targets)}")
+    print("Modo incremental por URL: no se omiten carpetas existentes; se agregan solo noticias nuevas.")
 
     global_summary: list[dict[str, Any]] = []
-    targets_to_download: list[date] = []
 
-    for target in targets:
-        if should_skip_existing_day(
-            base_dir=base_dir,
-            target=target,
-            overwrite_existing=args.overwrite_existing,
-        ):
-            skipped_summary = build_skipped_day_summary(base_dir, target)
-            print(
-                f"[SKIP] {target.isoformat()} | "
-                f"carpeta existente: {skipped_summary['day_dir']}"
-            )
-            global_summary.append(skipped_summary)
-        else:
-            targets_to_download.append(target)
-
-    preloaded_categoria_by_date: dict[date, dict[str, DiscoveredUrl]] | None = None
-
-    if len(targets_to_download) > 1:
+    if targets:
         print()
         print(
-            "Precargando /categoria/dia/ para los días faltantes del rango "
-            f"({len(targets_to_download)} días por descargar)..."
+            "Precargando /categoria/dia/ para el rango completo "
+            f"({len(targets)} días a revisar)..."
         )
         preloaded_categoria_by_date = discover_from_categoria_dia_range(
             session=session,
-            targets=targets_to_download,
+            targets=targets,
             max_pages=args.max_category_pages,
         )
-    elif len(targets_to_download) == 0:
-        print()
-        print("No hay días nuevos por descargar. Todas las carpetas del rango ya existen.")
+    else:
+        preloaded_categoria_by_date = {}
 
-    for target in targets_to_download:
+    for target in targets:
         try:
-            preloaded_categoria = (
-                preloaded_categoria_by_date.get(target, {})
-                if preloaded_categoria_by_date is not None
-                else None
-            )
+            preloaded_categoria = preloaded_categoria_by_date.get(target, {})
 
             summary = scrape_single_day(
                 session=session,
@@ -2437,9 +2536,18 @@ def main() -> None:
                 max_category_pages=args.max_category_pages,
                 preloaded_categoria=preloaded_categoria,
                 article_workers=args.article_workers,
+                overwrite_existing=args.overwrite_existing,
             )
-            summary["status"] = "downloaded"
+
+            if summary.get("articles_new_downloaded", 0) > 0:
+                summary["status"] = "updated_with_new_articles"
+            elif summary.get("output_written"):
+                summary["status"] = "written_without_new_articles"
+            else:
+                summary["status"] = "no_new_articles"
+
             global_summary.append(summary)
+
         except Exception as exc:
             print(f"[ERROR] Falló la descarga del día {target.isoformat()}: {exc}")
             global_summary.append(
@@ -2458,16 +2566,22 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    print("\n" + "=" * 70)
-    downloaded_count = sum(1 for item in global_summary if item.get("status") == "downloaded")
-    skipped_count = sum(1 for item in global_summary if item.get("status") == "skipped_existing_day")
-    error_count = sum(1 for item in global_summary if item.get("status") == "error")
+    updated_days = sum(1 for item in global_summary if item.get("status") == "updated_with_new_articles")
+    no_new_days = sum(1 for item in global_summary if item.get("status") == "no_new_articles")
+    written_days = sum(1 for item in global_summary if item.get("status") == "written_without_new_articles")
+    error_days = sum(1 for item in global_summary if item.get("status") == "error")
+    total_new_articles = sum(int(item.get("articles_new_downloaded", 0)) for item in global_summary)
+    total_after_merge = sum(int(item.get("articles_total_after_merge", 0)) for item in global_summary)
 
+    print("\n" + "=" * 70)
     print("PROCESO GENERAL TERMINADO")
-    print(f"Días en rango: {len(targets)}")
-    print(f"Días descargados: {downloaded_count}")
-    print(f"Días omitidos por existir: {skipped_count}")
-    print(f"Días con error: {error_count}")
+    print(f"Días en rango: {len(global_summary)}")
+    print(f"Días actualizados con noticias nuevas: {updated_days}")
+    print(f"Días sin noticias nuevas: {no_new_days}")
+    print(f"Días escritos sin noticias nuevas: {written_days}")
+    print(f"Días con error: {error_days}")
+    print(f"Noticias nuevas descargadas en total: {total_new_articles}")
+    print(f"Noticias totales acumuladas en archivos procesados: {total_after_merge}")
     print(f"Resumen general guardado en: {summary_path}")
     print("=" * 70)
 
