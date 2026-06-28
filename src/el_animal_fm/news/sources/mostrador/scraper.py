@@ -16,7 +16,9 @@ from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 from zoneinfo import ZoneInfo
 
+from el_animal_fm.news.domain.discovery import merge_discoveries
 from el_animal_fm.news.domain.models import DiscoveredUrl
+from el_animal_fm.news.infrastructure import article_html
 from el_animal_fm.news.infrastructure.dates import (
     build_date_range,
     date_dir_name,
@@ -33,6 +35,7 @@ from el_animal_fm.news.infrastructure.structured_data import (
     parse_json_ld,
     pick_article_jsonld,
 )
+from el_animal_fm.news.infrastructure import storage as common_storage
 from el_animal_fm.news.infrastructure.text import (
     clean_text as common_clean_text,
     detect_template_noise,
@@ -213,59 +216,6 @@ def page_url_for_number(base_url: str, page_number: int) -> str:
 
     cleaned = parsed._replace(path=f"{path}/page/{page_number}/", query="")
     return urlunparse(cleaned)
-
-
-def merge_discoveries(*groups: dict[str, DiscoveredUrl]) -> dict[str, DiscoveredUrl]:
-    merged: dict[str, DiscoveredUrl] = {}
-
-    for group in groups:
-        for url, item in group.items():
-            if url not in merged:
-                merged[url] = item
-                continue
-
-            current = merged[url]
-
-            current.discovered_from_sitemap = (
-                current.discovered_from_sitemap or item.discovered_from_sitemap
-            )
-            current.discovered_from_feed = (
-                current.discovered_from_feed or item.discovered_from_feed
-            )
-            current.discovered_from_dia_page = (
-                current.discovered_from_dia_page or item.discovered_from_dia_page
-            )
-            current.discovered_from_categoria_dia = (
-                current.discovered_from_categoria_dia or item.discovered_from_categoria_dia
-            )
-            current.discovered_from_home = (
-                current.discovered_from_home or item.discovered_from_home
-            )
-
-            if not current.discovered_from_section and item.discovered_from_section:
-                current.discovered_from_section = item.discovered_from_section
-
-            if current.listing_position is None and item.listing_position is not None:
-                current.listing_position = item.listing_position
-
-            if current.listing_page_number is None and item.listing_page_number is not None:
-                current.listing_page_number = item.listing_page_number
-
-            for attr in [
-                "listing_title",
-                "listing_excerpt",
-                "listing_author",
-                "listing_date_raw",
-                "listing_category",
-            ]:
-                if not getattr(current, attr) and getattr(item, attr):
-                    setattr(current, attr, getattr(item, attr))
-
-            for source in item.discovery_sources:
-                if source not in current.discovery_sources:
-                    current.discovery_sources.append(source)
-
-    return merged
 
 
 def infer_listing_category(anchor) -> str:
@@ -688,19 +638,16 @@ def discover_article_urls(
 
 
 def get_meta(soup: BeautifulSoup, key: str) -> str:
-    tag = soup.find("meta", attrs={"property": key})
-    if not tag:
-        tag = soup.find("meta", attrs={"name": key})
-    if tag and tag.get("content"):
-        return clean_text(tag["content"])
-    return ""
+    return article_html.get_meta(soup, key, text_cleaner=clean_text)
 
 
 def get_canonical_url(soup: BeautifulSoup, fallback_url: str) -> str:
-    tag = soup.find("link", rel=lambda value: value and "canonical" in value)
-    if tag and tag.get("href"):
-        return normalize_url(urljoin(BASE_URL, tag["href"]))
-    return fallback_url
+    return article_html.get_canonical_url(
+        soup,
+        fallback_url,
+        base_url=BASE_URL,
+        normalize_url=normalize_url,
+    )
 
 
 def parse_spanish_date(value: str) -> tuple[str, str, str, str]:
@@ -789,54 +736,30 @@ def get_published_data(soup: BeautifulSoup, article_ld: dict[str, Any]) -> tuple
 
 
 def get_title(soup: BeautifulSoup, article_ld: dict[str, Any]) -> str:
-    if article_ld.get("headline"):
-        return clean_text(str(article_ld["headline"]))
-
-    h1 = soup.find("h1")
-    if h1:
-        return remove_template_noise(text_or_empty(h1))
-
-    og_title = get_meta(soup, "og:title")
-    if og_title:
-        return clean_text(og_title)
-
-    if soup.title:
-        return clean_text(soup.title.get_text(" ", strip=True))
-
-    return ""
+    return article_html.get_title(
+        soup,
+        article_ld,
+        get_meta_value=get_meta,
+        text_cleaner=clean_text,
+        text_or_empty=text_or_empty,
+        remove_template_noise=remove_template_noise,
+    )
 
 
 def get_slug(url: str) -> str:
-    path = urlparse(url).path.rstrip("/")
-    name = path.split("/")[-1] if path else ""
-    return name
+    return article_html.get_slug(url)
 
 
 def get_article_id(soup: BeautifulSoup, url: str) -> str:
-    candidates = [
-        get_meta(soup, "article:id"),
-        get_meta(soup, "post_id"),
-        get_meta(soup, "id"),
-    ]
-
-    html = str(soup)
-    patterns = [
-        r"post[_-]?id[\"']?\s*[:=]\s*[\"']?(\d+)",
-        r"article[_-]?id[\"']?\s*[:=]\s*[\"']?(\d+)",
-        r"wp-post-(\d+)",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, html, flags=re.IGNORECASE)
-        if match:
-            candidates.append(match.group(1))
-
-    for candidate in candidates:
-        candidate = clean_text(candidate)
-        if candidate:
-            return candidate
-
-    return ""
+    return article_html.get_article_id(
+        soup,
+        get_meta_value=get_meta,
+        text_cleaner=clean_text,
+        extra_patterns=[
+            r"article[_-]?id[\"']?\s*[:=]\s*[\"']?(\d+)",
+            r"wp-post-(\d+)",
+        ],
+    )
 
 
 def humanize_section(value: str) -> str:
@@ -1060,38 +983,14 @@ def get_author_info(soup: BeautifulSoup, article_ld: dict[str, Any]) -> dict[str
 
 
 def find_article_container(soup: BeautifulSoup):
-    for selector in [
-        "article",
-        "main article",
-        "main",
-        "[class*='article']",
-        "[class*='post']",
-        "[class*='nota']",
-        "[class*='single']",
-    ]:
-        tag = soup.select_one(selector)
-        if tag:
-            return tag
-
-    return soup.body or soup
+    return article_html.find_article_container(
+        soup,
+        extra_selectors=["[class*='single']"],
+    )
 
 
 def remove_unwanted_tags(container) -> None:
-    for tag in container.find_all(
-        [
-            "script",
-            "style",
-            "noscript",
-            "nav",
-            "footer",
-            "header",
-            "aside",
-            "form",
-            "button",
-            "iframe",
-        ]
-    ):
-        tag.decompose()
+    article_html.remove_unwanted_tags(container)
 
 
 def is_boilerplate_paragraph(text: str) -> bool:
@@ -1263,63 +1162,16 @@ def get_subtitle_lead_and_summary(
 
 
 def get_image_data(soup: BeautifulSoup, article_ld: dict[str, Any], container) -> dict[str, Any]:
-    main_image_url = ""
-    main_image_alt = ""
-    image_caption = ""
-    image_credit = ""
-
-    image_value = article_ld.get("image")
-
-    if isinstance(image_value, str):
-        main_image_url = image_value
-    elif isinstance(image_value, dict):
-        main_image_url = str(image_value.get("url", ""))
-    elif isinstance(image_value, list) and image_value:
-        first_image = image_value[0]
-        if isinstance(first_image, str):
-            main_image_url = first_image
-        elif isinstance(first_image, dict):
-            main_image_url = str(first_image.get("url", ""))
-
-    if not main_image_url:
-        main_image_url = get_meta(soup, "og:image")
-
-    imgs = container.find_all("img") if container else soup.find_all("img")
-    image_count = len(imgs)
-
-    if imgs and not main_image_url:
-        src = imgs[0].get("src") or imgs[0].get("data-src") or ""
-        if src:
-            main_image_url = urljoin(BASE_URL, src)
-
-    if imgs:
-        main_image_alt = clean_text(imgs[0].get("alt", ""))
-
-    figure = container.find("figure") if container else soup.find("figure")
-    if figure:
-        figcaption = figure.find("figcaption")
-        if figcaption:
-            image_caption = clean_text(figcaption.get_text(" ", strip=True))
-
-    visible_text = container.get_text("\n", strip=True) if container else soup.get_text("\n", strip=True)
-
-    for line in visible_text.splitlines():
-        line_clean = clean_text(line)
-        lower = line_clean.lower()
-
-        if any(token in lower for token in ["foto:", "fotos:", "agenciauno", "agencia uno", "imagen:", "crédito"]):
-            if len(line_clean) <= 160:
-                image_credit = line_clean
-                break
-
-    return {
-        "main_image_url": main_image_url,
-        "main_image_alt": main_image_alt,
-        "image_caption": image_caption,
-        "image_credit": image_credit,
-        "has_image": bool(main_image_url or imgs),
-        "image_count": image_count,
-    }
+    return article_html.get_image_data(
+        soup,
+        article_ld,
+        container,
+        base_url=BASE_URL,
+        get_meta_value=get_meta,
+        text_cleaner=clean_text,
+        src_attrs=("src", "data-src"),
+        credit_markers=("foto:", "fotos:", "agenciauno", "agencia uno", "imagen:", "crédito"),
+    )
 
 
 def extract_video_audio_data(soup: BeautifulSoup, container) -> dict[str, Any]:
@@ -1561,11 +1413,12 @@ def infer_source_attribution_and_agency(body_text: str, image_credit: str, autho
 
 
 def save_raw_html(raw_html_dir: Path, url: str, html: str) -> str:
-    slug = get_slug(url) or "article"
-    safe_slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", slug)[:120]
-    path = raw_html_dir / f"{safe_slug}.html"
-    path.write_text(html, encoding="utf-8")
-    return str(path)
+    return article_html.save_raw_html(
+        raw_html_dir,
+        url,
+        html,
+        get_slug_value=get_slug,
+    )
 
 
 def build_empty_error_article(
@@ -1885,24 +1738,14 @@ def write_output(
     discovered_count: int,
     articles: list[dict[str, Any]],
 ) -> None:
-    payload = {
-        "metadata": {
-            "source": "elmostrador",
-            "target_date": target.isoformat(),
-            "target_date_folder": date_dir_name(target),
-            "articles_found": discovered_count,
-            "articles_downloaded": len(articles),
-            "generated_at": datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
-            "parser_version": PARSER_VERSION,
-        },
-        "articles": articles,
-    }
-
-    payload = normalize_payload_texts(payload)
-
-    output_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    common_storage.write_output(
+        output_path,
+        target,
+        discovered_count,
+        articles,
+        source="elmostrador",
+        parser_version=PARSER_VERSION,
+        payload_normalizer=normalize_payload_texts,
     )
 
 
@@ -1925,12 +1768,12 @@ def ask_days_back() -> int:
 
 def get_day_dir(base_dir: Path, target: date) -> Path:
     """Devuelve la carpeta diaria donde se guarda la descarga de una fecha."""
-    return base_dir / "mostrador" / date_dir_name(target)
+    return common_storage.get_day_dir(base_dir, "mostrador", target)
 
 
 def get_day_output_path(base_dir: Path, target: date) -> Path:
     """Devuelve el archivo principal esperado para una fecha."""
-    return get_day_dir(base_dir, target) / "noticias_dia.txt"
+    return common_storage.get_day_output_path(base_dir, "mostrador", target)
 
 
 def should_skip_existing_day(
@@ -1949,7 +1792,12 @@ def should_skip_existing_day(
     if overwrite_existing:
         return False
 
-    return get_day_dir(base_dir, target).exists()
+    return common_storage.should_skip_existing_day(
+        base_dir,
+        "mostrador",
+        target,
+        overwrite_existing=overwrite_existing,
+    )
 
 
 def build_skipped_day_summary(base_dir: Path, target: date) -> dict[str, Any]:
@@ -1957,19 +1805,7 @@ def build_skipped_day_summary(base_dir: Path, target: date) -> dict[str, Any]:
     Construye una entrada de resumen para días omitidos por existir previamente.
     No modifica la carpeta ni sus archivos.
     """
-    day_dir = get_day_dir(base_dir, target)
-    output_path = get_day_output_path(base_dir, target)
-    raw_html_dir = day_dir / "html"
-
-    return {
-        "target_date": target.isoformat(),
-        "status": "skipped_existing_day",
-        "reason": "La carpeta diaria ya existe y overwrite_existing=False.",
-        "day_dir": str(day_dir),
-        "output_path": str(output_path),
-        "output_exists": output_path.exists(),
-        "html_dir_exists": raw_html_dir.exists(),
-    }
+    return common_storage.build_skipped_day_summary(base_dir, "mostrador", target)
 
 
 def get_article_url_from_payload(article: dict[str, Any]) -> str:
@@ -1981,14 +1817,10 @@ def get_article_url_from_payload(article: dict[str, Any]) -> str:
 
     y también una estructura plana, por si en algún momento el payload cambia.
     """
-    if not isinstance(article, dict):
-        return ""
-
-    raw = article.get("raw")
-    if isinstance(raw, dict):
-        return normalize_url(str(raw.get("canonical_url") or raw.get("url") or ""))
-
-    return normalize_url(str(article.get("canonical_url") or article.get("url") or ""))
+    return common_storage.get_article_url_from_payload(
+        article,
+        normalize_url=normalize_url,
+    )
 
 
 def load_existing_day_payload(output_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], set[str]]:
@@ -2000,51 +1832,20 @@ def load_existing_day_payload(output_path: Path) -> tuple[dict[str, Any], list[d
     - lista de artículos existentes
     - set de URLs existentes normalizadas
     """
-    if not output_path.exists():
-        return {}, [], set()
-
-    try:
-        payload = json.loads(output_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        print(f"[WARN] No se pudo leer archivo existente {output_path}: {exc}")
-        return {}, [], set()
-
-    articles = payload.get("articles", [])
-    if not isinstance(articles, list):
-        print(f"[WARN] Archivo existente sin lista válida de articles: {output_path}")
-        return payload, [], set()
-
-    existing_urls: set[str] = set()
-
-    for article in articles:
-        url = get_article_url_from_payload(article)
-        if url:
-            existing_urls.add(url)
-
-    return payload, articles, existing_urls
+    return common_storage.load_existing_day_payload(
+        output_path,
+        normalize_url=normalize_url,
+    )
 
 
 def deduplicate_articles_by_url(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Elimina duplicados por URL/canonical_url preservando el primer registro encontrado.
     """
-    seen: set[str] = set()
-    deduped: list[dict[str, Any]] = []
-
-    for article in articles:
-        url = get_article_url_from_payload(article)
-
-        if not url:
-            deduped.append(article)
-            continue
-
-        if url in seen:
-            continue
-
-        seen.add(url)
-        deduped.append(article)
-
-    return deduped
+    return common_storage.deduplicate_articles_by_url(
+        articles,
+        normalize_url=normalize_url,
+    )
 
 
 def scrape_single_day(
