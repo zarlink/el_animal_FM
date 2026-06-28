@@ -389,6 +389,7 @@ class TrainResult:
     predictions_path: str
     feature_importance_path: str
     dataset_path: str
+    live_predictions_path: str | None
 
 
 # =============================================================================
@@ -906,7 +907,11 @@ def build_dataset_for_fund(
 
     ds = fund_target.join(news_df, how="left")
     ds = ds.replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    ds = ds[ds["future_valor_cuota"] > 0].copy()
+
+    # Importante para uso real / live:
+    # No eliminamos aquí las últimas filas sin future_valor_cuota.
+    # Esas filas no sirven para métricas históricas, pero sí sirven para
+    # generar señal live del último día disponible con valor cuota/noticias.
     return ds, serie
 
 
@@ -1217,6 +1222,107 @@ def build_entry_semaforo(
     return out
 
 
+def build_experiment_key(
+    fund_key: str,
+    mode_label: str,
+    probability_threshold: float,
+    target_threshold: float,
+) -> str:
+    return (
+        f"{fund_key}_{mode_label}"
+        f"_prob{probability_threshold:.3f}".replace(".", "p")
+        + f"_target{target_threshold:.4f}".replace(".", "p")
+    )
+
+
+def build_prediction_output(
+    source_df: pd.DataFrame,
+    y_prob: np.ndarray,
+    y_pred: np.ndarray,
+    fund_key: str,
+    selected_series: str,
+    probability_threshold: float,
+    target_threshold: float,
+    decision_mode: str,
+    decision_time_text: str | None,
+    use_same_day_return_features: bool,
+    horizon: int,
+    is_live_signal: bool,
+) -> pd.DataFrame:
+    """Construye salida de predicción histórica o live con semáforo operativo."""
+    cfg = FUND_CONFIG[fund_key]
+
+    prediction_base_cols = [
+        "valor_cuota",
+        "future_exit_date",
+        "future_valor_cuota",
+        "future_return_h",
+        "target_up",
+    ]
+
+    semaforo_feature_cols = [
+        "momentum_10",
+        "valor_cuota_vs_ma20",
+        "drawdown_20",
+        "return_roll_mean_5",
+        "return_roll_mean_10",
+        "return_roll_std_10",
+        "ma5_vs_ma20",
+    ]
+
+    cols = [c for c in prediction_base_cols + semaforo_feature_cols if c in source_df.columns]
+    predictions = source_df[cols].copy()
+
+    # Asegura columnas base aunque sea señal live sin futuro conocido.
+    for col in prediction_base_cols:
+        if col not in predictions.columns:
+            predictions[col] = np.nan
+
+    predictions["pred_prob_up"] = y_prob
+    predictions["pred_up"] = y_pred
+    predictions["decision"] = np.where(predictions["pred_up"] == 1, "mantener", "mover_o_retirar")
+    predictions["horizon_business_days"] = horizon
+    predictions["fund_key"] = fund_key
+    predictions["fund_label"] = str(cfg["label"])
+    predictions["selected_series"] = selected_series
+    predictions["decision_mode"] = decision_mode
+    predictions["decision_time"] = decision_time_text or ""
+    predictions["target_threshold"] = target_threshold
+    predictions["probability_threshold"] = probability_threshold
+    predictions["use_same_day_return_features"] = use_same_day_return_features
+    predictions["is_live_signal"] = bool(is_live_signal)
+    predictions["is_evaluable"] = ~((predictions["future_valor_cuota"] <= 0) | predictions["future_valor_cuota"].isna())
+
+    if is_live_signal:
+        predictions["captured_return_if_follow_signal"] = np.nan
+    else:
+        predictions["captured_return_if_follow_signal"] = np.where(
+            predictions["pred_up"] == 1,
+            predictions["future_return_h"],
+            0.0,
+        )
+
+    predictions = build_entry_semaforo(
+        predictions=predictions,
+        probability_threshold=probability_threshold,
+    )
+
+    return predictions
+
+
+def select_live_rows(dataset: pd.DataFrame, eval_start: date, eval_end: date) -> pd.DataFrame:
+    """Filas dentro del rango que tienen valor cuota/noticias, pero no futuro evaluable."""
+    live_df = dataset[
+        (dataset.index >= pd.Timestamp(eval_start))
+        & (dataset.index <= pd.Timestamp(eval_end))
+        & (
+            (dataset["future_valor_cuota"] <= 0)
+            | (dataset["future_valor_cuota"].isna())
+        )
+    ].copy()
+    return live_df
+
+
 def print_confusion_matrix_readable(metrics: dict[str, Any]) -> None:
     explained = metrics.get("confusion_matrix_explained", {})
     table = explained.get("table", {})
@@ -1274,14 +1380,27 @@ def train_and_evaluate_fund(
     horizon = int(cfg["horizon_business_days"])
     dataset = dataset.sort_index()
 
-    train_df = dataset[(dataset.index >= pd.Timestamp(train_start)) & (dataset.index <= pd.Timestamp(train_end))].copy()
-    eval_df = dataset[(dataset.index >= pd.Timestamp(eval_start)) & (dataset.index <= pd.Timestamp(eval_end))].copy()
+    # Dataset completo conserva filas live sin futuro conocido.
+    # Dataset evaluable se usa solamente para entrenamiento y métricas históricas.
+    evaluated_dataset = dataset[dataset["future_valor_cuota"] > 0].copy()
+
+    train_df = evaluated_dataset[(evaluated_dataset.index >= pd.Timestamp(train_start)) & (evaluated_dataset.index <= pd.Timestamp(train_end))].copy()
+    eval_df = evaluated_dataset[(evaluated_dataset.index >= pd.Timestamp(eval_start)) & (evaluated_dataset.index <= pd.Timestamp(eval_end))].copy()
+
+    print(f"  Dataset total: {len(dataset)} filas | evaluables: {len(evaluated_dataset)} | live/no evaluables: {len(dataset) - len(evaluated_dataset)}")
+    if len(dataset):
+        print(f"  Última fecha dataset: {dataset.index.max().date()}")
+    if len(evaluated_dataset):
+        print(f"  Última fecha evaluable: {evaluated_dataset.index.max().date()}")
 
     if len(train_df) < 30:
         raise RuntimeError(f"Entrenamiento insuficiente: {len(train_df)} filas")
 
     if len(eval_df) < 1:
-        raise RuntimeError("Evaluación sin filas")
+        raise RuntimeError(
+            "Evaluación sin filas evaluables. "
+            "Para predecir solo el último día sin futuro conocido, usa --predict-live-only."
+        )
 
     feature_cols = get_feature_columns(dataset, use_same_day_return_features=use_same_day_return_features)
 
@@ -1325,10 +1444,11 @@ def train_and_evaluate_fund(
     metrics = evaluate_predictions(y_eval, y_pred, y_prob, eval_df["future_return_h"].values, deps)
 
     effective_mode_label = mode_label or decision_mode
-    experiment_key = (
-        f"{fund_key}_{effective_mode_label}"
-        f"_prob{probability_threshold:.3f}".replace(".", "p")
-        + f"_target{target_threshold:.4f}".replace(".", "p")
+    experiment_key = build_experiment_key(
+        fund_key=fund_key,
+        mode_label=effective_mode_label,
+        probability_threshold=probability_threshold,
+        target_threshold=target_threshold,
     )
 
     suffix = (
@@ -1354,53 +1474,55 @@ def train_and_evaluate_fund(
         model_path,
     )
 
-    prediction_base_cols = [
-        "valor_cuota",
-        "future_exit_date",
-        "future_valor_cuota",
-        "future_return_h",
-        "target_up",
-    ]
-
-    # Columnas técnicas que sirven para monitorear el semáforo.
-    semaforo_feature_cols = [
-        "momentum_10",
-        "valor_cuota_vs_ma20",
-        "drawdown_20",
-        "return_roll_mean_5",
-        "return_roll_mean_10",
-        "return_roll_std_10",
-        "ma5_vs_ma20",
-    ]
-    available_semaforo_cols = [c for c in semaforo_feature_cols if c in eval_df.columns]
-
-    predictions = eval_df[prediction_base_cols + available_semaforo_cols].copy()
-    predictions["pred_prob_up"] = y_prob
-    predictions["pred_up"] = y_pred
-    predictions["decision"] = np.where(predictions["pred_up"] == 1, "mantener", "mover_o_retirar")
-    predictions["horizon_business_days"] = horizon
-    predictions["fund_key"] = fund_key
-    predictions["fund_label"] = str(cfg["label"])
-    predictions["selected_series"] = selected_series
-    predictions["decision_mode"] = decision_mode
-    predictions["decision_time"] = decision_time_text or ""
-    predictions["target_threshold"] = target_threshold
-    predictions["probability_threshold"] = probability_threshold
-    predictions["use_same_day_return_features"] = use_same_day_return_features
-    predictions["captured_return_if_follow_signal"] = np.where(
-        predictions["pred_up"] == 1,
-        predictions["future_return_h"],
-        0.0,
-    )
-
-    # Capa operativa: semáforo de entrada/permanencia.
-    predictions = build_entry_semaforo(
-        predictions=predictions,
+    predictions = build_prediction_output(
+        source_df=eval_df,
+        y_prob=y_prob,
+        y_pred=y_pred,
+        fund_key=fund_key,
+        selected_series=selected_series,
         probability_threshold=probability_threshold,
+        target_threshold=target_threshold,
+        decision_mode=decision_mode,
+        decision_time_text=decision_time_text,
+        use_same_day_return_features=use_same_day_return_features,
+        horizon=horizon,
+        is_live_signal=False,
     )
 
     predictions_path = OUTPUT_DIR / "predictions" / f"predicciones_{suffix}_eval_{eval_start}_{eval_end}.csv"
     predictions.to_csv(predictions_path, index_label="date", encoding="utf-8")
+
+    # Señales live: filas del rango que todavía no tienen futuro conocido.
+    # Se predicen con el mismo modelo entrenado y se guardan en CSV separado.
+    live_predictions_path: Path | None = None
+    live_df = select_live_rows(dataset, eval_start, eval_end)
+    if not live_df.empty:
+        X_live = live_df.copy()
+        for col in feature_cols:
+            if col not in X_live.columns:
+                X_live[col] = 0.0
+        X_live = X_live[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+        live_prob = model.predict_proba(X_live)[:, 1]
+        live_pred = (live_prob >= probability_threshold).astype(int)
+        live_predictions = build_prediction_output(
+            source_df=live_df,
+            y_prob=live_prob,
+            y_pred=live_pred,
+            fund_key=fund_key,
+            selected_series=selected_series,
+            probability_threshold=probability_threshold,
+            target_threshold=target_threshold,
+            decision_mode=decision_mode,
+            decision_time_text=decision_time_text,
+            use_same_day_return_features=use_same_day_return_features,
+            horizon=horizon,
+            is_live_signal=True,
+        )
+
+        live_predictions_path = OUTPUT_DIR / "predictions" / f"live_predicciones_{suffix}_eval_{eval_start}_{eval_end}.csv"
+        live_predictions.to_csv(live_predictions_path, index_label="date", encoding="utf-8")
+        print(f"Señales live guardadas en: {live_predictions_path}")
 
     importance = pd.DataFrame({"feature": feature_cols, "importance": model.feature_importances_}).sort_values("importance", ascending=False)
     importance_path = OUTPUT_DIR / "features" / f"importancia_{suffix}_eval_{eval_start}_{eval_end}.csv"
@@ -1434,8 +1556,117 @@ def train_and_evaluate_fund(
         predictions_path=str(predictions_path),
         feature_importance_path=str(importance_path),
         dataset_path=str(dataset_path),
+        live_predictions_path=str(live_predictions_path) if live_predictions_path else None,
     )
 
+
+
+def predict_live_from_saved_model(
+    fund_key: str,
+    dataset: pd.DataFrame,
+    selected_series: str,
+    train_start: date,
+    train_end: date,
+    eval_start: date,
+    eval_end: date,
+    probability_threshold: float,
+    decision_mode: str,
+    decision_time_text: str | None,
+    use_same_day_return_features: bool,
+    target_threshold: float,
+    mode_label: str | None = None,
+) -> str | None:
+    """Carga el modelo esperado por fondo/configuración y genera solo señales live.
+
+    Útil para el uso diario: tengo noticias y valor cuota hasta hoy, pero no
+    future_valor_cuota. No calcula métricas ni reentrena.
+    """
+    deps = import_ml_dependencies()
+    joblib = deps["joblib"]
+
+    cfg = FUND_CONFIG[fund_key]
+    horizon = int(cfg["horizon_business_days"])
+    dataset = dataset.sort_index()
+
+    effective_mode_label = mode_label or decision_mode
+    experiment_key = build_experiment_key(
+        fund_key=fund_key,
+        mode_label=effective_mode_label,
+        probability_threshold=probability_threshold,
+        target_threshold=target_threshold,
+    )
+    suffix = f"{experiment_key}_{train_start}_{train_end}"
+    model_path = OUTPUT_DIR / "models" / f"xgb_{suffix}.joblib"
+
+    if not model_path.exists():
+        raise RuntimeError(
+            f"No existe modelo guardado para {fund_key}: {model_path}. "
+            "Primero ejecuta una corrida normal de entrenamiento/evaluación con los mismos parámetros."
+        )
+
+    payload = joblib.load(model_path)
+    model = payload["model"]
+    feature_cols = list(payload.get("feature_cols", []))
+    if not feature_cols:
+        raise RuntimeError(f"Modelo sin feature_cols en payload: {model_path}")
+
+    # En live-only usamos las filas no evaluables. Si no hay, tomamos la última
+    # fila disponible del rango como señal práctica del día solicitado.
+    live_df = select_live_rows(dataset, eval_start, eval_end)
+    if live_df.empty:
+        live_df = dataset[
+            (dataset.index >= pd.Timestamp(eval_start))
+            & (dataset.index <= pd.Timestamp(eval_end))
+        ].tail(1).copy()
+
+    if live_df.empty:
+        print(f"[WARN] Sin filas para señal live de {fund_key} entre {eval_start} y {eval_end}.")
+        return None
+
+    X_live = live_df.copy()
+    for col in feature_cols:
+        if col not in X_live.columns:
+            X_live[col] = 0.0
+    X_live = X_live[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    live_prob = model.predict_proba(X_live)[:, 1]
+    live_pred = (live_prob >= probability_threshold).astype(int)
+
+    live_predictions = build_prediction_output(
+        source_df=live_df,
+        y_prob=live_prob,
+        y_pred=live_pred,
+        fund_key=fund_key,
+        selected_series=selected_series,
+        probability_threshold=probability_threshold,
+        target_threshold=target_threshold,
+        decision_mode=decision_mode,
+        decision_time_text=decision_time_text,
+        use_same_day_return_features=use_same_day_return_features,
+        horizon=horizon,
+        is_live_signal=True,
+    )
+
+    live_predictions_path = OUTPUT_DIR / "predictions" / f"live_predicciones_{suffix}_eval_{eval_start}_{eval_end}.csv"
+    live_predictions.to_csv(live_predictions_path, index_label="date", encoding="utf-8")
+
+    print(f"Modelo cargado: {model_path}")
+    print(f"Señales live guardadas en: {live_predictions_path}")
+    print(live_predictions.tail(5)[[
+        "valor_cuota",
+        "pred_prob_up",
+        "pred_up",
+        "momentum_10",
+        "valor_cuota_vs_ma20",
+        "drawdown_20",
+        "entry_score",
+        "semaforo_green_required",
+        "semaforo",
+        "decision_if_out",
+        "decision_if_in",
+    ]].to_string())
+
+    return str(live_predictions_path)
 
 
 # =============================================================================
@@ -2184,6 +2415,14 @@ def parse_args() -> argparse.Namespace:
             "Útil si quieres volver temporalmente a base_xgb_params."
         ),
     )
+    parser.add_argument(
+        "--predict-live-only",
+        action="store_true",
+        help=(
+            "No reentrena ni calcula métricas. Carga el modelo .joblib esperado para cada fondo "
+            "y genera solo live_predicciones para el último día/rango solicitado."
+        ),
+    )
 
     # Overrides selectivos para aplicar una prueba global sin editar FUND_MODEL_CONFIG.
     parser.add_argument("--override-decision-mode", choices=["strict_lag", "night_partial", "same_day_close"], default=None)
@@ -2341,6 +2580,7 @@ def main() -> None:
     print(f"  Modo evaluación 3 modalidades: {run_all_modes}")
     print(f"  Usa presets por fondo: {not args.no_fund_presets}")
     print(f"  Usa XGB_MODEL_CONFIG: {not args.no_fund_xgb_config}")
+    print(f"  Predict live only: {bool(args.predict_live_only)}")
     print(f"  Optuna threshold search: {bool(args.optuna_threshold_search)}")
     print(f"  Optuna XGB search: {bool(args.optuna_xgb_search)}")
 
@@ -2495,6 +2735,24 @@ def main() -> None:
             dataset.to_csv(ds_path, index_label="date", encoding="utf-8")
             print(f" Dataset guardado en: {ds_path}")
 
+            if args.predict_live_only:
+                predict_live_from_saved_model(
+                    fund_key=fund_key,
+                    dataset=dataset,
+                    selected_series=serie,
+                    train_start=train_start,
+                    train_end=train_end,
+                    eval_start=eval_start,
+                    eval_end=eval_end,
+                    probability_threshold=probability_threshold,
+                    decision_mode=decision_mode,
+                    decision_time_text=decision_time_text,
+                    use_same_day_return_features=use_same_day_return_features,
+                    target_threshold=target_threshold,
+                    mode_label=mode_label,
+                )
+                continue
+
             result = train_and_evaluate_fund(
                 fund_key=fund_key,
                 dataset=dataset,
@@ -2521,6 +2779,8 @@ def main() -> None:
             print_confusion_matrix_readable(result.metrics)
             print(f"Modelo: {result.model_path}")
             print(f"Predicciones: {result.predictions_path}")
+            if result.live_predictions_path:
+                print(f"Predicciones live: {result.live_predictions_path}")
             print(f"Importancia variables: {result.feature_importance_path}")
 
         except Exception as exc:
