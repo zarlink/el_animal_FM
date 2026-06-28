@@ -5,8 +5,8 @@ import json
 import re
 import time
 from concurrent.futures import as_completed, ThreadPoolExecutor
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
@@ -15,7 +15,33 @@ import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 from zoneinfo import ZoneInfo
-import html as html_lib
+
+from el_animal_fm.news.domain.models import DiscoveredUrl
+from el_animal_fm.news.infrastructure.dates import (
+    build_date_range,
+    date_dir_name,
+    parse_target_date,
+    url_matches_date,
+)
+from el_animal_fm.news.infrastructure.http_client import (
+    REQUEST_TIMEOUT,
+    create_session,
+    decode_response_text,
+    fetch_text,
+)
+from el_animal_fm.news.infrastructure.structured_data import (
+    parse_json_ld,
+    pick_article_jsonld,
+)
+from el_animal_fm.news.infrastructure.text import (
+    clean_text as common_clean_text,
+    detect_template_noise,
+    normalize_payload_texts as common_normalize_payload_texts,
+    normalize_text as common_normalize_text,
+    remove_template_noise as common_remove_template_noise,
+    soup_from_html,
+    text_or_empty as common_text_or_empty,
+)
 
 
 BASE_URL = "https://www.elmostrador.cl"
@@ -27,7 +53,6 @@ NEWS_SITEMAP_URL = f"{BASE_URL}/sitemap_news.xml"
 PARSER_VERSION = "elmostrador_raw_v2_range_sections"
 TIMEZONE = "America/Santiago"
 
-REQUEST_TIMEOUT = 30
 DEFAULT_SLEEP_SECONDS = 0.5
 DEFAULT_MAX_CATEGORY_PAGES = 350
 
@@ -92,114 +117,6 @@ SPANISH_MONTHS = {
 }
 
 
-@dataclass
-class DiscoveredUrl:
-    url: str
-    discovered_from_sitemap: bool = False
-    discovered_from_feed: bool = False
-    discovered_from_dia_page: bool = False
-    discovered_from_categoria_dia: bool = False
-    discovered_from_home: bool = False
-    discovered_from_section: str = ""
-    listing_position: int | None = None
-    listing_page_number: int | None = None
-    listing_title: str = ""
-    listing_excerpt: str = ""
-    listing_author: str = ""
-    listing_date_raw: str = ""
-    listing_category: str = ""
-    discovery_sources: list[str] = field(default_factory=list)
-
-
-def today_chile() -> date:
-    return datetime.now(ZoneInfo(TIMEZONE)).date()
-
-
-def parse_target_date(value: str | None) -> date:
-    """
-    Acepta:
-    - None: fecha actual en Chile.
-    - DD_MM_YYYY
-    - DD-MM-YYYY
-    - YYYY-MM-DD
-    """
-    if not value:
-        return today_chile()
-
-    value = value.strip()
-
-    for fmt in ("%d_%m_%Y", "%d-%m-%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(value, fmt).date()
-        except ValueError:
-            pass
-
-    raise ValueError(
-        "Formato de fecha no reconocido. Usa DD_MM_YYYY, DD-MM-YYYY o YYYY-MM-DD."
-    )
-
-
-def date_dir_name(target: date) -> str:
-    return target.strftime("%d_%m_%Y")
-
-
-def create_session() -> requests.Session:
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "es-CL,es;q=0.9,en;q=0.7",
-        }
-    )
-    return session
-
-
-def decode_response_text(response: requests.Response) -> str:
-    """
-    Decodifica HTML/XML de forma estable.
-    Evita problemas de caracteres cuando response.text no detecta bien encoding.
-    """
-    try:
-        return response.content.decode("utf-8", errors="replace")
-    except Exception:
-        response.encoding = response.apparent_encoding or response.encoding or "utf-8"
-        return response.text
-
-def repair_mojibake(value: str) -> str:
-    """
-    Corrige casos típicos:
-    'dÃ©ficit' -> 'déficit'
-    'caÃ­da' -> 'caída'
-    """
-    if not isinstance(value, str) or not value:
-        return value or ""
-
-    markers = ("Ã", "Â", "â€", "â€œ", "â€", "â€™", "ðŸ")
-
-    if not any(marker in value for marker in markers):
-        return value
-
-    candidates = [value]
-
-    for source_encoding in ("latin1", "cp1252"):
-        try:
-            candidates.append(
-                value.encode(source_encoding, errors="ignore").decode("utf-8", errors="ignore")
-            )
-        except Exception:
-            pass
-
-    def badness(text: str) -> int:
-        return sum(text.count(marker) for marker in markers) + text.count("�") * 3
-
-    return min(candidates, key=badness)
-
-
 def remove_elmostrador_boilerplate(value: str) -> str:
     """
     Elimina ruido repetido propio de El Mostrador, sin eliminar el contenido útil.
@@ -216,41 +133,20 @@ def remove_elmostrador_boilerplate(value: str) -> str:
     return text
 
 
-def normalize_text(value: Any) -> str:
-    """
-    Normaliza HTML entities, espacios, mojibake y boilerplate editorial.
-    """
-    if value is None:
-        return ""
-
-    text = str(value)
-    text = html_lib.unescape(text)
-    text = repair_mojibake(text)
-    text = remove_elmostrador_boilerplate(text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def normalize_payload_texts(value: Any) -> Any:
-    """
-    Aplica normalización recursiva antes de guardar el JSON final.
-    """
-    if isinstance(value, dict):
-        return {k: normalize_payload_texts(v) for k, v in value.items()}
-
-    if isinstance(value, list):
-        return [normalize_payload_texts(v) for v in value]
-
-    if isinstance(value, str):
-        return normalize_text(value)
-
-    return value
-
-def fetch_text(session: requests.Session, url: str) -> tuple[str, int, str]:
-    response = session.get(url, timeout=REQUEST_TIMEOUT)
-    content_type = response.headers.get("Content-Type", "")
-    response.raise_for_status()
-    return decode_response_text(response), response.status_code, content_type
+normalize_text = partial(
+    common_normalize_text,
+    boilerplate_remover=remove_elmostrador_boilerplate,
+)
+normalize_payload_texts = partial(
+    common_normalize_payload_texts,
+    text_normalizer=normalize_text,
+)
+clean_text = partial(common_clean_text, text_normalizer=normalize_text)
+remove_template_noise = partial(
+    common_remove_template_noise,
+    text_normalizer=normalize_text,
+)
+text_or_empty = partial(common_text_or_empty, text_normalizer=normalize_text)
 
 def normalize_url(url: str) -> str:
     url = url.strip()
@@ -265,25 +161,6 @@ def normalize_url(url: str) -> str:
 
     cleaned = parsed._replace(query=urlencode(query_items, doseq=True))
     return urlunparse(cleaned)
-
-
-def clean_text(value: str) -> str:
-    return normalize_text(value)
-
-
-def remove_template_noise(value: str) -> str:
-    value = re.sub(r"\{\{.*?\}\}", "", value or "")
-    return normalize_text(value)
-
-
-def text_or_empty(tag) -> str:
-    if not tag:
-        return ""
-    return clean_text(tag.get_text(" ", strip=True))
-
-
-def soup_from_html(html: str) -> BeautifulSoup:
-    return BeautifulSoup(html, "lxml")
 
 
 def is_elmostrador_article_url(url: str) -> bool:
@@ -315,10 +192,6 @@ def is_elmostrador_article_url(url: str) -> bool:
         return False
 
     return bool(re.search(r"/20\d{2}/\d{2}/\d{2}/", path))
-
-
-def url_matches_date(url: str, target: date) -> bool:
-    return target.strftime("/%Y/%m/%d/") in url
 
 
 def date_from_article_url(url: str) -> date | None:
@@ -828,46 +701,6 @@ def get_canonical_url(soup: BeautifulSoup, fallback_url: str) -> str:
     if tag and tag.get("href"):
         return normalize_url(urljoin(BASE_URL, tag["href"]))
     return fallback_url
-
-
-def parse_json_ld(soup: BeautifulSoup) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-
-    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
-        raw = script.string or script.get_text(strip=True)
-
-        if not raw:
-            continue
-
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            continue
-
-        if isinstance(parsed, list):
-            items.extend([x for x in parsed if isinstance(x, dict)])
-        elif isinstance(parsed, dict):
-            if "@graph" in parsed and isinstance(parsed["@graph"], list):
-                items.extend([x for x in parsed["@graph"] if isinstance(x, dict)])
-            else:
-                items.append(parsed)
-
-    return items
-
-
-def pick_article_jsonld(items: list[dict[str, Any]]) -> dict[str, Any]:
-    for item in items:
-        item_type = item.get("@type")
-
-        if isinstance(item_type, list):
-            types = {str(x).lower() for x in item_type}
-        else:
-            types = {str(item_type).lower()}
-
-        if {"newsarticle", "article", "blogposting", "reportagearticle"} & types:
-            return item
-
-    return {}
 
 
 def parse_spanish_date(value: str) -> tuple[str, str, str, str]:
@@ -1727,10 +1560,6 @@ def infer_source_attribution_and_agency(body_text: str, image_credit: str, autho
     }
 
 
-def detect_template_noise(html: str) -> bool:
-    return "{{" in html or "}}" in html
-
-
 def save_raw_html(raw_html_dir: Path, url: str, html: str) -> str:
     slug = get_slug(url) or "article"
     safe_slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", slug)[:120]
@@ -1801,7 +1630,10 @@ def extract_article(
 
     soup = soup_from_html(html)
     json_ld_items = parse_json_ld(soup)
-    article_ld = pick_article_jsonld(json_ld_items)
+    article_ld = pick_article_jsonld(
+        json_ld_items,
+        allowed_types={"newsarticle", "article", "blogposting", "reportagearticle"},
+    )
 
     canonical_url = get_canonical_url(soup, url)
     article_id = get_article_id(soup, url)
@@ -2089,10 +1921,6 @@ def ask_days_back() -> int:
             pass
 
         print("Ingresa un número entero mayor o igual a 1.")
-
-
-def build_date_range(end_date: date, days_count: int) -> list[date]:
-    return [end_date - timedelta(days=i) for i in range(days_count)]
 
 
 def get_day_dir(base_dir: Path, target: date) -> Path:
