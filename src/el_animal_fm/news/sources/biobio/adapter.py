@@ -4,6 +4,7 @@ from typing import Any
 
 from el_animal_fm.news.application.source_adapter import NewsSourceAdapter
 from el_animal_fm.news.domain.models import DiscoveredUrl
+from el_animal_fm.news.sources.biobio import discovery
 from el_animal_fm.news.sources.biobio import scraper
 
 
@@ -40,12 +41,11 @@ def create_adapter() -> NewsSourceAdapter:
         default_max_category_pages=scraper.DEFAULT_MAX_CATEGORY_PAGES,
         days_back_example=14,
         payload_normalizer=scraper.normalize_payload_texts,
-        normalize_url=scraper.normalize_url,
-        discover_article_urls=scraper.discover_article_urls,
+        normalize_url=discovery.normalize_url,
+        discover_article_urls=discovery.discover_article_urls,
         extract_article=scraper.extract_article,
         build_error_article=build_error_article,
     )
 
 
 __all__ = ["create_adapter"]
-
