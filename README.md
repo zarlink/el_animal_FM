@@ -1,6 +1,6 @@
 # El Animal FM: pipeline de noticias, fondos mutuos y prediccion con XGBoost
 
-Este proyecto construye una cadena completa para transformar noticias chilenas en variables cuantitativas y cruzarlas con series de fondos mutuos descargadas desde la CMF. La primera version predictiva ya esta implementada en `09_xgboost_prediction.py`: entrena modelos XGBoost por fondo, evalua distintas modalidades temporales de uso de noticias y genera senales operativas del tipo `mantener`, `mover_o_retirar`, `entrar`, `esperar` o `salir_o_mover_defensivo`.
+Este proyecto construye una cadena completa para transformar noticias chilenas en variables cuantitativas y cruzarlas con series de fondos mutuos descargadas desde la CMF. La capa predictiva se ejecuta desde `09_xgboost_prediction.py`, pero su implementacion vive modularizada en `src/el_animal_fm/prediction/`: entrena modelos XGBoost por fondo, evalua distintas modalidades temporales de uso de noticias y genera senales operativas del tipo `mantener`, `mover_o_retirar`, `entrar`, `esperar` o `salir_o_mover_defensivo`.
 
 El flujo no parte en el modelo. Antes de llegar a XGBoost, los scripts anteriores descargan noticias, normalizan texto, unifican corpus, crean candidatos de diccionario, enriquecen cada noticia con features tematicas y descargan los datos financieros que sirven como variable objetivo.
 
@@ -11,16 +11,26 @@ El flujo no parte en el modelo. Antes de llegar a XGBoost, los scripts anteriore
 * [1. Objetivo](#1-objetivo)
 * [2. Flujo completo](#2-flujo-completo)
 * [3. Scripts del proyecto](#3-scripts-del-proyecto)
-* [4. Instalacion](#4-instalacion)
-* [5. Ejecucion recomendada de punta a punta](#5-ejecucion-recomendada-de-punta-a-punta)
-* [6. Noticias: descarga, limpieza y corpus](#6-noticias-descarga-limpieza-y-corpus)
-* [7. Diccionarios y enriquecimiento](#7-diccionarios-y-enriquecimiento)
-* [8. Fondos mutuos CMF](#8-fondos-mutuos-cmf)
-* [9. Predictor XGBoost por fondo](#9-predictor-xgboost-por-fondo)
-* [10. Graficos de reportes XGBoost](#10-graficos-de-reportes-xgboost)
-* [11. Estructura de archivos](#11-estructura-de-archivos)
-* [12. Datos generados actualmente](#12-datos-generados-actualmente)
-* [13. Consideraciones metodologicas](#13-consideraciones-metodologicas)
+* [4. Arquitectura modular actual](#4-arquitectura-modular-actual)
+  * [4.1 Lectura top-down](#41-lectura-top-down)
+  * [4.2 Migracion de scripts a modulos](#42-migracion-de-scripts-a-modulos)
+  * [4.3 Capa predictiva modular](#43-capa-predictiva-modular)
+* [5. Instalacion](#5-instalacion)
+* [6. Ejecucion recomendada de punta a punta](#6-ejecucion-recomendada-de-punta-a-punta)
+* [7. Noticias: descarga, limpieza y corpus](#7-noticias-descarga-limpieza-y-corpus)
+* [8. Diccionarios y enriquecimiento](#8-diccionarios-y-enriquecimiento)
+* [9. Fondos mutuos CMF](#9-fondos-mutuos-cmf)
+* [10. Predictor XGBoost por fondo](#10-predictor-xgboost-por-fondo)
+  * [10.1 Arquitectura interna del predictor](#101-arquitectura-interna-del-predictor)
+  * [10.2 Entradas requeridas](#102-entradas-requeridas)
+  * [10.3 Fondos modelados](#103-fondos-modelados)
+  * [10.4 Features y modalidades](#104-features-y-modalidades)
+  * [10.5 Entrenamiento, tuning y senales](#105-entrenamiento-tuning-y-senales)
+  * [10.6 Salidas](#106-salidas)
+* [11. Graficos de reportes XGBoost](#11-graficos-de-reportes-xgboost)
+* [12. Estructura de archivos](#12-estructura-de-archivos)
+* [13. Datos generados actualmente](#13-datos-generados-actualmente)
+* [14. Consideraciones metodologicas](#14-consideraciones-metodologicas)
 
 ---
 
@@ -133,12 +143,142 @@ Hay tres capas conceptuales:
 | `06_enriquecer_noticias.py` | Aplica diccionarios, candidatos y reglas heuristicas. | `noticias_dia.txt`, `diccionarios/`, `candidatos_diccionario.json`. | `noticias_dia_enriquecidas.txt` y resumenes. |
 | `07_download_biobio_from_google.py` | Herramienta auxiliar para recuperar BioBio historico via Google. | Google + parser de `01`. | Actualiza `biobio/DD_MM_YYYY/noticias_dia.txt`. |
 | `08_descarga_fondos_mutuos.py` | Descarga cartolas diarias de fondos desde CMF. | CMF, rango de fechas, fondo y CAPTCHA manual. | `downloads/<fondo>/*.txt` y resumen CMF. |
-| `09_xgboost_prediction.py` | Entrena/evalua XGBoost por fondo con noticias enriquecidas y datos CMF. | `noticias_dia_enriquecidas.txt` + `downloads/`. | Modelos, datasets, predicciones, importancia y reportes. |
+| `09_xgboost_prediction.py` | Wrapper del predictor modular XGBoost por fondo. | `noticias_dia_enriquecidas.txt` + `downloads/`. | Modelos, datasets, predicciones, importancia y reportes. |
 | `10_graficos_xgboost.py` | Grafica reportes JSON generados por `09`. | `xgboost_outputs/reports/*.json`. | `xgboost_outputs/report_charts/*.png`. |
 
 ---
 
-## 4. Instalacion
+## 4. Arquitectura modular actual
+
+El proyecto conserva scripts numerados en la raiz para que el flujo operativo siga siendo facil de ejecutar, pero la implementacion principal vive en `src/el_animal_fm/`. Los scripts raiz funcionan como fachadas: preparan el entorno cuando hace falta y delegan en modulos internos.
+
+Esta migracion deja dos beneficios practicos:
+
+* Los comandos historicos siguen funcionando, por ejemplo `python 09_xgboost_prediction.py`.
+* La logica queda organizada por dominio y rol, lo que facilita mantener scrapers, normalizadores, diccionarios, descargas CMF y modelos predictivos sin editar archivos monoliticos.
+
+### 4.1 Lectura top-down
+
+Una lectura top-down recomendada del proyecto es:
+
+```text
+Scripts raiz
+   |
+   v
+src/el_animal_fm/cli/
+   |
+   v
+src/el_animal_fm/<dominio>/application/
+   |
+   v
+src/el_animal_fm/<dominio>/domain/
+src/el_animal_fm/<dominio>/infrastructure/
+```
+
+Roles por capa:
+
+| Capa | Rol |
+| --- | --- |
+| Scripts raiz | Compatibilidad y ejecucion directa de cada etapa numerada. |
+| `cli/` | Parseo de argumentos, prompts y entrada de usuario. |
+| `application/` | Casos de uso: descargar, normalizar, enriquecer, construir datasets, entrenar o graficar. |
+| `domain/` | Modelos y conceptos propios del dominio, sin dependencias de ejecucion. |
+| `infrastructure/` | Clientes HTTP, storage, rutas, HTML, fechas, CAPTCHA u otros detalles externos. |
+
+### 4.2 Migracion de scripts a modulos
+
+Los archivos numerados se han ido migrando a modulos internos, manteniendo wrappers en la raiz:
+
+| Script raiz | CLI/modulo principal | Rol |
+| --- | --- | --- |
+| `01_biobio_download.py` | `src/el_animal_fm/cli/download_biobio.py` | Descarga BioBio usando fuente modular. |
+| `02_mostrador_download.py` | `src/el_animal_fm/cli/download_mostrador.py` | Descarga El Mostrador usando fuente modular. |
+| `03_normalizador_noticias.py` | `src/el_animal_fm/cli/normalize_news.py` | Normalizacion de noticias por carpeta/fecha. |
+| `04_unificador_noticias_diccionario.py` | `src/el_animal_fm/cli/unify_news_dictionary.py` | Construccion del corpus comun. |
+| `05_creador_diccionario_adicional.py` | `src/el_animal_fm/cli/create_dictionary_candidates.py` | Extraccion de candidatos de diccionario. |
+| `06_enriquecer_noticias.py` | `src/el_animal_fm/cli/enrich_news.py` | Enriquecimiento tematico de noticias. |
+| `08_descarga_fondos_mutuos.py` | `src/el_animal_fm/cli/download_mutual_funds.py` | Descarga CMF de fondos mutuos. |
+| `09_xgboost_prediction.py` | `src/el_animal_fm/cli/xgboost_prediction.py` | Entrenamiento, evaluacion, tuning y senales XGBoost. |
+
+En noticias, la estructura interna sigue el dominio:
+
+```text
+src/el_animal_fm/news/
++-- application/
+|   +-- download/
+|   +-- normalization/
+|   +-- unification/
+|   +-- dictionary/
+|   +-- enrichment/
+|   +-- shared/
++-- domain/
++-- infrastructure/
++-- sources/
+    +-- biobio/
+    +-- mostrador/
+```
+
+En fondos, la separacion queda orientada a CMF, catalogo y descarga:
+
+```text
+src/el_animal_fm/funds/
++-- application/
+|   +-- catalog/
+|   +-- cmf/
+|   +-- download/
++-- domain/
++-- infrastructure/
+```
+
+### 4.3 Capa predictiva modular
+
+La migracion mas reciente separo `09_xgboost_prediction.py` en una capa propia:
+
+```text
+src/el_animal_fm/prediction/
++-- domain/
++-- infrastructure/
++-- application/
+    +-- config/
+    +-- features/
+    +-- xgboost/
+    +-- signals/
+    +-- tuning/
+    +-- shared/
+    +-- pipeline.py
+```
+
+La decision de crear `prediction/` como dominio propio evita acoplar el modelo exclusivamente a `news` o `funds`. El predictor cruza ambos mundos: consume noticias enriquecidas, consume fondos CMF y genera senales/modelos. Por eso vive en una capa independiente.
+
+Resumen de la migracion:
+
+| Antes | Ahora |
+| --- | --- |
+| `09_xgboost_prediction.py` concentraba configuracion, carga de datos, features, entrenamiento, Optuna, predicciones y CLI. | `09_xgboost_prediction.py` queda como wrapper compatible. |
+| La configuracion de fondos y modelos estaba mezclada con la ejecucion. | `prediction/application/config/` concentra presets, thresholds, espacios Optuna y runtime. |
+| La carga de noticias y fondos estaba dentro del mismo archivo que entrenaba. | `prediction/application/features/` separa noticias, CMF, features financieras y dataset. |
+| XGBoost, evaluacion y tuning compartian el mismo espacio. | `prediction/application/xgboost/` y `prediction/application/tuning/` separan entrenamiento/evaluacion de busquedas Optuna. |
+| Las senales operativas estaban mezcladas con el entrenamiento. | `prediction/application/signals/` concentra predicciones, live signals y semaforo. |
+
+Roles principales:
+
+| Modulo | Rol |
+| --- | --- |
+| `prediction/application/config/` | Configuracion de fondos, mercados, thresholds, presets, espacios Optuna y runtime. |
+| `prediction/application/features/` | Carga de noticias enriquecidas, carga CMF, features financieras y armado del dataset final. |
+| `prediction/application/xgboost/` | Dependencias ML, parametros, entrenamiento y evaluacion del modelo XGBoost. |
+| `prediction/application/signals/` | Construccion de predicciones, senales live y semaforo operativo. |
+| `prediction/application/tuning/` | Busquedas Optuna de thresholds y de hiperparametros XGBoost. |
+| `prediction/application/shared/` | Utilidades comunes de fechas, horas, parsing numerico y nombres seguros. |
+| `prediction/application/pipeline.py` | Orquestador principal del flujo predictivo. |
+| `prediction/domain/models.py` | Resultado estructurado de entrenamiento (`TrainResult`). |
+| `prediction/infrastructure/output_paths.py` | Rutas compatibles con `downloads/`, `biobio/`, `mostrador/` y `xgboost_outputs/`. |
+
+Para agregar nuevos fondos o mercados, el primer punto de revision debe ser `prediction/application/config/`. Para cambiar features, revisar `features/`. Para ajustar la logica de entrenamiento, revisar `xgboost/`. Para modificar decisiones operativas o semaforo, revisar `signals/`.
+
+---
+
+## 5. Instalacion
 
 Crear y activar entorno virtual:
 
@@ -174,7 +314,7 @@ pip install pandas numpy scikit-learn xgboost joblib matplotlib optuna
 
 ---
 
-## 5. Ejecucion recomendada de punta a punta
+## 6. Ejecucion recomendada de punta a punta
 
 Ejemplo para construir noticias, enriquecerlas, descargar fondos y entrenar modelos:
 
@@ -198,7 +338,7 @@ python 09_xgboost_prediction.py --train-start 2025-04-04 --train-end 2026-05-01 
 
 ---
 
-## 6. Noticias: descarga, limpieza y corpus
+## 7. Noticias: descarga, limpieza y corpus
 
 ### `01_biobio_download.py`
 
@@ -327,7 +467,7 @@ python 07_download_biobio_from_google.py --start-date 2026-04-30 --days-back 30 
 
 ---
 
-## 7. Diccionarios y enriquecimiento
+## 8. Diccionarios y enriquecimiento
 
 ### `05_creador_diccionario_adicional.py`
 
@@ -423,7 +563,7 @@ python 06_enriquecer_noticias.py --no-candidates
 
 ---
 
-## 8. Fondos mutuos CMF
+## 9. Fondos mutuos CMF
 
 `08_descarga_fondos_mutuos.py` descarga cartolas diarias desde la CMF. Es el puente entre el mundo noticioso y la variable financiera que luego usa `09`.
 
@@ -467,9 +607,9 @@ Las columnas CMF relevantes para `09` incluyen, cuando existen:
 
 ---
 
-## 9. Predictor XGBoost por fondo
+## 10. Predictor XGBoost por fondo
 
-`09_xgboost_prediction.py` es la primera version del predictor de tendencias de fondos mutuos. Entrena y evalua modelos XGBoost binarios por fondo, usando:
+`09_xgboost_prediction.py` es el wrapper compatible del predictor de tendencias de fondos mutuos. La implementacion modular vive en `src/el_animal_fm/prediction/`. Entrena y evalua modelos XGBoost binarios por fondo, usando:
 
 * Features de noticias enriquecidas generadas por `06`.
 * Series de fondos descargadas desde CMF con `08`.
@@ -477,7 +617,51 @@ Las columnas CMF relevantes para `09` incluyen, cuando existen:
 * Targets futuros definidos por horizonte y umbral de retorno.
 * Presets por fondo para modalidad, probabilidad minima, umbral de target e hiperparametros XGBoost.
 
-### Entradas requeridas
+### 10.1 Arquitectura interna del predictor
+
+La lectura top-down del predictor es:
+
+```text
+09_xgboost_prediction.py
+   |
+   v
+src/el_animal_fm/cli/xgboost_prediction.py
+   |
+   v
+src/el_animal_fm/prediction/application/pipeline.py
+   |
+   +-- config/
+   +-- features/
+   +-- xgboost/
+   +-- signals/
+   +-- tuning/
+   +-- shared/
+```
+
+Responsabilidades principales:
+
+| Archivo o carpeta | Responsabilidad |
+| --- | --- |
+| `09_xgboost_prediction.py` | Wrapper raiz. Mantiene el comando historico y delega al CLI modular. |
+| `src/el_animal_fm/cli/xgboost_prediction.py` | Define argumentos CLI y ejecuta el pipeline. |
+| `prediction/application/pipeline.py` | Orquesta fechas, fondos, experimentos, cache de noticias, entrenamiento, prediccion live y resumenes. |
+| `prediction/application/config/prediction_config.py` | Define fondos, horizontes, series preferidas, presets, parametros XGBoost y espacios Optuna. |
+| `prediction/application/config/runtime_config.py` | Convierte argumentos CLI y presets en configuracion efectiva por fondo. |
+| `prediction/application/features/news_feature_builder.py` | Lee noticias enriquecidas y construye matriz diaria de features noticiosas. |
+| `prediction/application/features/fund_series_loader.py` | Lee archivos CMF, filtra RUN, escoge serie y arma serie de valor cuota. |
+| `prediction/application/features/fund_feature_builder.py` | Calcula features financieras y targets futuros. |
+| `prediction/application/features/dataset_builder.py` | Une features de fondos y noticias en el dataset final por fondo. |
+| `prediction/application/xgboost/xgb_params.py` | Parametros base, overrides, candidatos y sugerencias Optuna. |
+| `prediction/application/xgboost/xgb_training.py` | Entrena modelos, guarda `.joblib`, predicciones e importancia de variables. |
+| `prediction/application/xgboost/xgb_evaluation.py` | Calcula metricas, matriz de confusion y scores de optimizacion. |
+| `prediction/application/signals/prediction_output.py` | Construye CSV de predicciones, senales live y semaforo operativo. |
+| `prediction/application/tuning/optuna_threshold_search.py` | Busca `target_threshold`, `probability_threshold` y modalidad. |
+| `prediction/application/tuning/optuna_xgb_search.py` | Busca hiperparametros XGBoost por fondo. |
+| `prediction/infrastructure/output_paths.py` | Centraliza rutas de entrada/salida compatibles con la estructura historica. |
+
+Esta division permite que los reentrenamientos periodicos se concentren en `config/`, `xgboost/` y `tuning/`, mientras que la incorporacion de nuevos mercados o fuentes de features puede trabajarse en `config/` y `features/`.
+
+### 10.2 Entradas requeridas
 
 `09` espera que existan:
 
@@ -495,7 +679,7 @@ noticias_dia_enriquecidas.txt
 
 Por eso no basta con descargar noticias: hay que correr `06` antes de entrenar.
 
-### Fondos modelados por `09`
+### 10.3 Fondos modelados
 
 `09` usa una configuracion propia, alineada con las descargas CMF:
 
@@ -515,7 +699,7 @@ target_up = future_return_h > target_threshold
 
 Si `target_up = 1`, el modelo interpreta que el fondo supera el umbral definido para su horizonte. La senal operacional queda como `mantener`. Si `target_up = 0`, la senal queda como `mover_o_retirar`.
 
-### Series CMF
+#### Series CMF
 
 Cada fondo puede tener varias series. `09` elige la primera disponible segun `preferred_series`; si no encuentra una preferida, usa la serie con mayor patrimonio promedio.
 
@@ -528,7 +712,9 @@ Preferencias actuales:
 | `national_equity` | `F1`, `SIMPLE`, `APV`, `IT` |
 | `toesca_equity` | `F1`, `SIMPLE`, `APV`, `IT` |
 
-### Features de noticias
+### 10.4 Features y modalidades
+
+#### Features de noticias
 
 `09` convierte cada `noticias_dia_enriquecidas.txt` en una matriz diaria. Por cada articulo, extrae variables numericas desde:
 
@@ -559,7 +745,7 @@ Sobre la matriz diaria agrega rezagos y ventanas:
 | `_same_day` | Solo en modo `same_day_close`. |
 | `_today_until_decision` | Solo en modo `night_partial`. |
 
-### Modalidades de decision
+#### Modalidades de decision
 
 El predictor compara o ejecuta tres formas de usar la informacion noticiosa:
 
@@ -571,7 +757,7 @@ El predictor compara o ejecuta tres formas de usar la informacion noticiosa:
 
 Por defecto, si no se usa `--single-preset-run`, `09` prueba automaticamente las tres modalidades para cada fondo seleccionado y escribe un resumen comparativo.
 
-### Features propias del fondo
+#### Features propias del fondo
 
 `09` transforma la serie CMF en variables tecnicas:
 
@@ -597,7 +783,9 @@ patrimonio_return_1d
 participes_change_1d
 ```
 
-### Presets actuales por fondo
+### 10.5 Entrenamiento, tuning y senales
+
+#### Presets actuales por fondo
 
 `FUND_MODEL_CONFIG` define modalidad, hora de decision, umbral de probabilidad y umbral de target para cada fondo:
 
@@ -622,7 +810,7 @@ Si se quieren ignorar solo los hiperparametros por fondo y volver a `base_xgb_pa
 python 09_xgboost_prediction.py --train-start 2025-04-04 --train-end 2026-05-01 --eval-start 2026-05-02 --eval-end 2026-06-26 --fund all --single-preset-run --no-fund-xgb-config
 ```
 
-### Comandos principales de `09`
+#### Comandos principales de `09`
 
 Comparar las tres modalidades por fondo:
 
@@ -701,7 +889,7 @@ python 09_xgboost_prediction.py \
   --optuna-xgb-score strategy_return
 ```
 
-### Argumentos CLI relevantes
+#### Argumentos CLI relevantes
 
 | Argumento | Descripcion |
 | --- | --- |
@@ -723,7 +911,9 @@ python 09_xgboost_prediction.py \
 | `--optuna-threshold-search` | Busca umbrales y modalidad con Optuna. |
 | `--optuna-xgb-search` | Busca hiperparametros XGBoost con Optuna. |
 
-### Salidas de `09`
+### 10.6 Salidas
+
+#### Salidas de `09`
 
 `09` crea automaticamente:
 
@@ -752,7 +942,7 @@ Archivos principales:
 | `reports/resumen_xgboost_*.json` | Reporte estructurado por experimento. |
 | `reports/resumen_xgboost_*.csv` | Version plana del resumen para Excel/pandas. |
 
-### Columnas importantes en predicciones
+#### Columnas importantes en predicciones
 
 `predicciones_*.csv` contiene columnas como:
 
@@ -771,7 +961,7 @@ Archivos principales:
 | `decision_if_out` | Decision si actualmente no se esta dentro: `entrar` o `esperar`. |
 | `decision_if_in` | Decision si actualmente se esta dentro: `mantener`, `mantener_con_alerta` o `salir_o_mover_defensivo`. |
 
-### Semaforo operativo
+#### Semaforo operativo
 
 El semaforo no reentrena el modelo ni cambia `pred_up`. Es una capa adicional para lectura operativa.
 
@@ -791,7 +981,7 @@ Regla:
 | `amarillo` | Condiciones mixtas; puede justificar mantener con alerta si ya se esta dentro. |
 | `rojo` | Esperar fuera o evaluar salida/mover a defensivo. |
 
-### Metricas del reporte
+#### Metricas del reporte
 
 Cada experimento guarda metricas de clasificacion y de estrategia:
 
@@ -820,7 +1010,7 @@ La matriz de confusion se interpreta asi:
 
 ---
 
-## 10. Graficos de reportes XGBoost
+## 11. Graficos de reportes XGBoost
 
 `10_graficos_xgboost.py` lee los JSON generados por `09` desde:
 
@@ -853,7 +1043,7 @@ python 10_graficos_xgboost.py --report-dir xgboost_outputs/reports --pattern "re
 
 ---
 
-## 11. Estructura de archivos
+## 12. Estructura de archivos
 
 ```text
 el_animal_FM/
@@ -869,6 +1059,48 @@ el_animal_FM/
 +-- 10_graficos_xgboost.py
 +-- requirements.txt
 +-- README.md
++-- src/
+|   +-- el_animal_fm/
+|       +-- cli/
+|       |   +-- download_biobio.py
+|       |   +-- download_mostrador.py
+|       |   +-- normalize_news.py
+|       |   +-- unify_news_dictionary.py
+|       |   +-- create_dictionary_candidates.py
+|       |   +-- enrich_news.py
+|       |   +-- download_mutual_funds.py
+|       |   +-- xgboost_prediction.py
+|       +-- news/
+|       |   +-- application/
+|       |   |   +-- download/
+|       |   |   +-- normalization/
+|       |   |   +-- unification/
+|       |   |   +-- dictionary/
+|       |   |   +-- enrichment/
+|       |   |   +-- shared/
+|       |   +-- domain/
+|       |   +-- infrastructure/
+|       |   +-- sources/
+|       |       +-- biobio/
+|       |       +-- mostrador/
+|       +-- funds/
+|       |   +-- application/
+|       |   |   +-- catalog/
+|       |   |   +-- cmf/
+|       |   |   +-- download/
+|       |   +-- domain/
+|       |   +-- infrastructure/
+|       +-- prediction/
+|           +-- application/
+|           |   +-- config/
+|           |   +-- features/
+|           |   +-- xgboost/
+|           |   +-- signals/
+|           |   +-- tuning/
+|           |   +-- shared/
+|           |   +-- pipeline.py
+|           +-- domain/
+|           +-- infrastructure/
 +-- noticias_unificadas.txt
 +-- candidatos_diccionario.json
 +-- resumen_historial_noticias.json
@@ -912,7 +1144,7 @@ el_animal_FM/
 
 ---
 
-## 12. Datos generados actualmente
+## 13. Datos generados actualmente
 
 Metricas historicas ya presentes en el proyecto:
 
@@ -943,7 +1175,7 @@ xgboost_outputs/reports/resumen_xgboost_*.csv
 
 ---
 
-## 13. Consideraciones metodologicas
+## 14. Consideraciones metodologicas
 
 Este proyecto ya contiene una primera version funcional del predictor, pero los resultados deben leerse como senales experimentales, no como recomendacion financiera automatica.
 
