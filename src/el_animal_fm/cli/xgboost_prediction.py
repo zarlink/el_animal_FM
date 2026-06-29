@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from el_animal_fm.prediction.application.prediction_pipeline import main
+from el_animal_fm.prediction.application.pipeline import main
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(

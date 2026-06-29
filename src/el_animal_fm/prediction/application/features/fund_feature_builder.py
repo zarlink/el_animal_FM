@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from el_animal_fm.prediction.application.prediction_config import FUND_CONFIG
+from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
 
 def add_fund_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()

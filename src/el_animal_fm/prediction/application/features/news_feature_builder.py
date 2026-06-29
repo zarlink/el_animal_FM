@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from el_animal_fm.prediction.application.prediction_utils import (
+from el_animal_fm.prediction.application.shared.prediction_utils import (
     feature_safe_name,
     folder_to_date,
     safe_float,

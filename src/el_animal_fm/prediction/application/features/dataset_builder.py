@@ -5,9 +5,9 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from el_animal_fm.prediction.application.fund_feature_builder import add_fund_features, add_targets
-from el_animal_fm.prediction.application.fund_series_loader import load_fund_data
-from el_animal_fm.prediction.application.prediction_config import FUND_CONFIG
+from el_animal_fm.prediction.application.features.fund_feature_builder import add_fund_features, add_targets
+from el_animal_fm.prediction.application.features.fund_series_loader import load_fund_data
+from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
 
 def build_dataset_for_fund(
     fund_key: str,

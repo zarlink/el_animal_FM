@@ -6,8 +6,8 @@ from typing import Any
 
 import numpy as np
 
-from el_animal_fm.prediction.application.ml_dependencies import import_ml_dependencies
-from el_animal_fm.prediction.application.prediction_config import RANDOM_SEED, XGB_MODEL_CONFIG, XGB_SEARCH_SPACE
+from el_animal_fm.prediction.application.xgboost.ml_dependencies import import_ml_dependencies
+from el_animal_fm.prediction.application.config.prediction_config import RANDOM_SEED, XGB_MODEL_CONFIG, XGB_SEARCH_SPACE
 
 def base_xgb_params(
     scale_pos_weight: float = 1.0,

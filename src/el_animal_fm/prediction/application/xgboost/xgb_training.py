@@ -7,12 +7,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from el_animal_fm.prediction.application.dataset_builder import get_feature_columns
-from el_animal_fm.prediction.application.ml_dependencies import import_ml_dependencies
-from el_animal_fm.prediction.application.prediction_config import FUND_CONFIG
-from el_animal_fm.prediction.application.prediction_output import build_experiment_key, build_prediction_output, select_live_rows
-from el_animal_fm.prediction.application.xgb_evaluation import evaluate_predictions
-from el_animal_fm.prediction.application.xgb_params import base_xgb_params, merge_xgb_params, tune_params
+from el_animal_fm.prediction.application.features.dataset_builder import get_feature_columns
+from el_animal_fm.prediction.application.xgboost.ml_dependencies import import_ml_dependencies
+from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
+from el_animal_fm.prediction.application.signals.prediction_output import build_experiment_key, build_prediction_output, select_live_rows
+from el_animal_fm.prediction.application.xgboost.xgb_evaluation import evaluate_predictions
+from el_animal_fm.prediction.application.xgboost.xgb_params import base_xgb_params, merge_xgb_params, tune_params
 from el_animal_fm.prediction.domain.models import TrainResult
 from el_animal_fm.prediction.infrastructure.output_paths import OUTPUT_DIR
 

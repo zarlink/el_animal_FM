@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from el_animal_fm.prediction.application.prediction_config import FUND_CONFIG, FUND_MODEL_CONFIG, XGB_MODEL_CONFIG
+from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG, FUND_MODEL_CONFIG, XGB_MODEL_CONFIG
 
 def get_runtime_config_for_fund(fund_key: str, args: argparse.Namespace) -> dict[str, Any]:
     if args.no_fund_presets:

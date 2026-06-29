@@ -7,10 +7,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from el_animal_fm.prediction.application.dataset_builder import get_feature_columns
-from el_animal_fm.prediction.application.ml_dependencies import import_ml_dependencies
-from el_animal_fm.prediction.application.prediction_config import FUND_CONFIG
-from el_animal_fm.prediction.application.prediction_utils import parse_user_time
+from el_animal_fm.prediction.application.features.dataset_builder import get_feature_columns
+from el_animal_fm.prediction.application.xgboost.ml_dependencies import import_ml_dependencies
+from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
+from el_animal_fm.prediction.application.shared.prediction_utils import parse_user_time
 from el_animal_fm.prediction.infrastructure.output_paths import OUTPUT_DIR
 
 def build_entry_semaforo(

@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from el_animal_fm.prediction.application.prediction_config import FUND_CONFIG
-from el_animal_fm.prediction.application.prediction_utils import safe_float
+from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
+from el_animal_fm.prediction.application.shared.prediction_utils import safe_float
 from el_animal_fm.prediction.infrastructure.output_paths import DOWNLOADS_DIR
 
 def discover_fund_files(fund_key: str) -> list[Path]:

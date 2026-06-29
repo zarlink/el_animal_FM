@@ -9,13 +9,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from el_animal_fm.prediction.application.dataset_builder import build_dataset_for_fund, get_feature_columns
-from el_animal_fm.prediction.application.ml_dependencies import import_ml_dependencies, import_optuna_dependency
-from el_animal_fm.prediction.application.news_feature_builder import load_news_features
-from el_animal_fm.prediction.application.prediction_config import FUND_CONFIG, RANDOM_SEED, THRESHOLD_SEARCH_SPACE, get_decision_mode_config
-from el_animal_fm.prediction.application.prediction_utils import parse_user_time
-from el_animal_fm.prediction.application.xgb_evaluation import build_threshold_score, evaluate_predictions
-from el_animal_fm.prediction.application.xgb_params import base_xgb_params
+from el_animal_fm.prediction.application.features.dataset_builder import build_dataset_for_fund, get_feature_columns
+from el_animal_fm.prediction.application.xgboost.ml_dependencies import import_ml_dependencies, import_optuna_dependency
+from el_animal_fm.prediction.application.features.news_feature_builder import load_news_features
+from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG, RANDOM_SEED, THRESHOLD_SEARCH_SPACE, get_decision_mode_config
+from el_animal_fm.prediction.application.shared.prediction_utils import parse_user_time
+from el_animal_fm.prediction.application.xgboost.xgb_evaluation import build_threshold_score, evaluate_predictions
+from el_animal_fm.prediction.application.xgboost.xgb_params import base_xgb_params
 from el_animal_fm.prediction.infrastructure.output_paths import OUTPUT_DIR, ensure_output_dirs
 
 def train_eval_for_threshold_trial(

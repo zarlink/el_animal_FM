@@ -9,15 +9,15 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from el_animal_fm.prediction.application.dataset_builder import build_dataset_for_fund, get_feature_columns
-from el_animal_fm.prediction.application.ml_dependencies import import_ml_dependencies, import_optuna_dependency
-from el_animal_fm.prediction.application.news_feature_builder import load_news_features
-from el_animal_fm.prediction.application.prediction_config import FUND_CONFIG, RANDOM_SEED
-from el_animal_fm.prediction.application.prediction_utils import parse_user_time
-from el_animal_fm.prediction.application.runtime_config import get_runtime_config_for_fund, print_fund_runtime_config
-from el_animal_fm.prediction.application.xgb_evaluation import build_xgb_score, evaluate_predictions
-from el_animal_fm.prediction.application.xgb_params import base_xgb_params, suggest_xgb_params_for_fund
-from el_animal_fm.prediction.application.xgb_training import train_and_evaluate_fund
+from el_animal_fm.prediction.application.features.dataset_builder import build_dataset_for_fund, get_feature_columns
+from el_animal_fm.prediction.application.xgboost.ml_dependencies import import_ml_dependencies, import_optuna_dependency
+from el_animal_fm.prediction.application.features.news_feature_builder import load_news_features
+from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG, RANDOM_SEED
+from el_animal_fm.prediction.application.shared.prediction_utils import parse_user_time
+from el_animal_fm.prediction.application.config.runtime_config import get_runtime_config_for_fund, print_fund_runtime_config
+from el_animal_fm.prediction.application.xgboost.xgb_evaluation import build_xgb_score, evaluate_predictions
+from el_animal_fm.prediction.application.xgboost.xgb_params import base_xgb_params, suggest_xgb_params_for_fund
+from el_animal_fm.prediction.application.xgboost.xgb_training import train_and_evaluate_fund
 from el_animal_fm.prediction.infrastructure.output_paths import OUTPUT_DIR, ensure_output_dirs
 
 def train_eval_for_xgb_trial(
