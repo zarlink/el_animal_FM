@@ -4,6 +4,15 @@ from typing import Any
 
 from el_animal_fm.news.application.source_adapter import NewsSourceAdapter
 from el_animal_fm.news.domain.models import DiscoveredUrl
+from el_animal_fm.news.sources.biobio.config import (
+    DAYS_BACK_EXAMPLE,
+    DEFAULT_MAX_CATEGORY_PAGES,
+    DEFAULT_SLEEP_SECONDS,
+    DISPLAY_NAME,
+    PARSER_VERSION,
+    SOURCE_FOLDER,
+    SOURCE_NAME,
+)
 from el_animal_fm.news.sources.biobio import discovery
 from el_animal_fm.news.sources.biobio import scraper
 
@@ -11,7 +20,7 @@ from el_animal_fm.news.sources.biobio import scraper
 def build_error_article(discovered: DiscoveredUrl, exc: Exception) -> dict[str, Any]:
     return {
         "raw": {
-            "source": "biobiochile",
+            "source": SOURCE_NAME,
             "source_type": "news_site",
             "url": discovered.url,
         },
@@ -21,7 +30,7 @@ def build_error_article(discovered: DiscoveredUrl, exc: Exception) -> dict[str, 
             "downloaded_from_sitemap": discovered.discovered_from_sitemap,
             "downloaded_from_feed": discovered.discovered_from_feed,
             "html_raw_path": "",
-            "parser_version": scraper.PARSER_VERSION,
+            "parser_version": PARSER_VERSION,
             "parse_success": False,
             "parse_errors": [f"parallel_worker_error: {exc}"],
             "template_noise_detected": False,
@@ -33,13 +42,13 @@ def build_error_article(discovered: DiscoveredUrl, exc: Exception) -> dict[str, 
 
 def create_adapter() -> NewsSourceAdapter:
     return NewsSourceAdapter(
-        display_name="BioBioChile",
-        source_name="biobiochile",
-        source_folder="biobio",
-        parser_version=scraper.PARSER_VERSION,
-        default_sleep_seconds=scraper.DEFAULT_SLEEP_SECONDS,
-        default_max_category_pages=scraper.DEFAULT_MAX_CATEGORY_PAGES,
-        days_back_example=14,
+        display_name=DISPLAY_NAME,
+        source_name=SOURCE_NAME,
+        source_folder=SOURCE_FOLDER,
+        parser_version=PARSER_VERSION,
+        default_sleep_seconds=DEFAULT_SLEEP_SECONDS,
+        default_max_category_pages=DEFAULT_MAX_CATEGORY_PAGES,
+        days_back_example=DAYS_BACK_EXAMPLE,
         payload_normalizer=scraper.normalize_payload_texts,
         normalize_url=discovery.normalize_url,
         discover_article_urls=discovery.discover_article_urls,

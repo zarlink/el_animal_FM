@@ -22,25 +22,16 @@ from el_animal_fm.news.infrastructure.text import (
     normalize_text as common_normalize_text,
     soup_from_html,
 )
+from el_animal_fm.news.sources.biobio.config import (
+    BASE_URL,
+    CATEGORY_ARCHIVE_SEED_URL,
+    DEFAULT_CATEGORY_ARCHIVE_URLS,
+    LO_ULTIMO_URL,
+    NEWS_SITEMAP_URL,
+)
 
-
-BASE_URL = "https://www.biobiochile.cl"
-NEWS_SITEMAP_URL = f"{BASE_URL}/news-sitemap.xml"
-LO_ULTIMO_URL = f"{BASE_URL}/lo-ultimo.shtml"
-CATEGORY_ARCHIVE_SEED_URL = f"{BASE_URL}/lista/categorias/nacional"
 
 PRIMARY_RE = re.compile(r"primary:\s+([a-z0-9-]+)\s+([a-z0-9-]+)", re.I)
-
-DEFAULT_CATEGORY_ARCHIVE_URLS = [
-    f"{BASE_URL}/lista/categorias/nacional",
-    f"{BASE_URL}/lista/categorias/internacional",
-    f"{BASE_URL}/lista/categorias/economia",
-    f"{BASE_URL}/lista/categorias/deportes",
-    f"{BASE_URL}/lista/categorias/sociedad",
-    f"{BASE_URL}/lista/categorias/espectaculos-y-tv",
-    f"{BASE_URL}/lista/categorias/opinion",
-    f"{BASE_URL}/lista/categorias/bbcl-investiga",
-]
 
 clean_text = partial(common_clean_text, text_normalizer=common_normalize_text)
 
@@ -511,4 +502,3 @@ def discover_article_urls(
     merged = merge_discoveries(category_archives, news, monthly, latest)
 
     return dict(sorted(merged.items(), key=lambda kv: kv[0]))
-

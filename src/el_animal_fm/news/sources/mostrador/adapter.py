@@ -6,6 +6,15 @@ import requests
 
 from el_animal_fm.news.application.source_adapter import NewsSourceAdapter, PreloadByDate
 from el_animal_fm.news.domain.models import DiscoveredUrl
+from el_animal_fm.news.sources.mostrador.config import (
+    DAYS_BACK_EXAMPLE,
+    DEFAULT_MAX_CATEGORY_PAGES,
+    DEFAULT_SLEEP_SECONDS,
+    DISPLAY_NAME,
+    PARSER_VERSION,
+    SOURCE_FOLDER,
+    SOURCE_NAME,
+)
 from el_animal_fm.news.sources.mostrador import discovery
 from el_animal_fm.news.sources.mostrador import scraper
 
@@ -33,13 +42,13 @@ def preload_range(
 
 def create_adapter() -> NewsSourceAdapter:
     return NewsSourceAdapter(
-        display_name="El Mostrador",
-        source_name="elmostrador",
-        source_folder="mostrador",
-        parser_version=scraper.PARSER_VERSION,
-        default_sleep_seconds=scraper.DEFAULT_SLEEP_SECONDS,
-        default_max_category_pages=scraper.DEFAULT_MAX_CATEGORY_PAGES,
-        days_back_example=30,
+        display_name=DISPLAY_NAME,
+        source_name=SOURCE_NAME,
+        source_folder=SOURCE_FOLDER,
+        parser_version=PARSER_VERSION,
+        default_sleep_seconds=DEFAULT_SLEEP_SECONDS,
+        default_max_category_pages=DEFAULT_MAX_CATEGORY_PAGES,
+        days_back_example=DAYS_BACK_EXAMPLE,
         payload_normalizer=scraper.normalize_payload_texts,
         normalize_url=discovery.normalize_url,
         discover_article_urls=discovery.discover_article_urls,

@@ -19,56 +19,15 @@ from el_animal_fm.news.infrastructure.text import (
     soup_from_html,
     text_or_empty as common_text_or_empty,
 )
-
-
-BASE_URL = "https://www.elmostrador.cl"
-DIA_URL = f"{BASE_URL}/dia/"
-CATEGORIA_DIA_URL = f"{BASE_URL}/categoria/dia/"
-SITEMAP_URL = f"{BASE_URL}/sitemap.xml"
-NEWS_SITEMAP_URL = f"{BASE_URL}/sitemap_news.xml"
-
-ELMOSTRADOR_BOILERPLATE_PATTERNS = [
-    r"\bsíntesis generada con openai\b",
-    r"\bsintesis generada con openai\b",
-    r"\bdesarrollado por el mostrador\b",
-    r"\btambién te puede interesar\b",
-    r"\btambien te puede interesar\b",
-    r"\bnoticias del día\b",
-    r"\bnoticias del dia\b",
-    r"\bdestacados\b",
-    r"\bver más\b",
-    r"\bver mas\b",
-    r"\bpublicidad\b",
-    r"\bsíguenos en\b",
-    r"\bsiguenos en\b",
-    r"\bsúmate a nuestro canal\b",
-    r"\bsumate a nuestro canal\b",
-    r"\breciba los newsletter\b",
-    r"\binscríbete en el newsletter\b",
-    r"\binscribete en el newsletter\b",
-    r"\balgunos derechos reservados\b",
-    r"\binfo@elmostrador\.cl\b",
-]
-
-DEFAULT_SECTION_ARCHIVE_URLS = [
-    f"{BASE_URL}/",
-    f"{BASE_URL}/noticias/pais/",
-    f"{BASE_URL}/noticias/mundo/",
-    f"{BASE_URL}/noticias/sin-editar/",
-    f"{BASE_URL}/mercados/",
-    f"{BASE_URL}/mercados/actualidad-economica/",
-    f"{BASE_URL}/noticias/opinion/",
-    f"{BASE_URL}/categoria/columnas/",
-    f"{BASE_URL}/categoria/cartas/",
-    f"{BASE_URL}/categoria/editorial/",
-    f"{BASE_URL}/categoria/tv/",
-    f"{BASE_URL}/noticias/multimedia/",
-    f"{BASE_URL}/cultura/",
-    f"{BASE_URL}/agenda-pais/",
-    f"{BASE_URL}/categoria/agenda/",
-    f"{BASE_URL}/braga/",
-    f"{BASE_URL}/noticias/deportes/",
-]
+from el_animal_fm.news.sources.mostrador.config import (
+    BASE_URL,
+    CATEGORIA_DIA_URL,
+    DEFAULT_SECTION_ARCHIVE_URLS,
+    DIA_URL,
+    ELMOSTRADOR_BOILERPLATE_PATTERNS,
+    NEWS_SITEMAP_URL,
+    SITEMAP_URL,
+)
 
 
 def remove_elmostrador_boilerplate(value: str) -> str:
@@ -568,4 +527,3 @@ def discover_article_urls(
 
     merged = merge_discoveries(dia, sections, categoria, sitemaps)
     return dict(sorted(merged.items(), key=lambda kv: kv[0]))
-

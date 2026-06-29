@@ -31,55 +31,16 @@ from el_animal_fm.news.infrastructure.text import (
     soup_from_html,
     text_or_empty as common_text_or_empty,
 )
+from el_animal_fm.news.sources.mostrador.config import (
+    BASE_URL,
+    DEFAULT_MAX_CATEGORY_PAGES,
+    DEFAULT_SLEEP_SECONDS,
+    ELMOSTRADOR_BOILERPLATE_PATTERNS,
+    PARSER_VERSION,
+    SPANISH_MONTHS,
+    TIMEZONE,
+)
 from el_animal_fm.news.sources.mostrador import discovery as discovery_module
-
-
-BASE_URL = "https://www.elmostrador.cl"
-
-PARSER_VERSION = "elmostrador_raw_v2_range_sections"
-TIMEZONE = "America/Santiago"
-
-DEFAULT_SLEEP_SECONDS = 0.5
-DEFAULT_MAX_CATEGORY_PAGES = 350
-
-ELMOSTRADOR_BOILERPLATE_PATTERNS = [
-    r"\bsíntesis generada con openai\b",
-    r"\bsintesis generada con openai\b",
-    r"\bdesarrollado por el mostrador\b",
-    r"\btambién te puede interesar\b",
-    r"\btambien te puede interesar\b",
-    r"\bnoticias del día\b",
-    r"\bnoticias del dia\b",
-    r"\bdestacados\b",
-    r"\bver más\b",
-    r"\bver mas\b",
-    r"\bpublicidad\b",
-    r"\bsíguenos en\b",
-    r"\bsiguenos en\b",
-    r"\bsúmate a nuestro canal\b",
-    r"\bsumate a nuestro canal\b",
-    r"\breciba los newsletter\b",
-    r"\binscríbete en el newsletter\b",
-    r"\binscribete en el newsletter\b",
-    r"\balgunos derechos reservados\b",
-    r"\binfo@elmostrador\.cl\b",
-]
-
-SPANISH_MONTHS = {
-    "enero": 1,
-    "febrero": 2,
-    "marzo": 3,
-    "abril": 4,
-    "mayo": 5,
-    "junio": 6,
-    "julio": 7,
-    "agosto": 8,
-    "septiembre": 9,
-    "setiembre": 9,
-    "octubre": 10,
-    "noviembre": 11,
-    "diciembre": 12,
-}
 
 
 def remove_elmostrador_boilerplate(value: str) -> str:

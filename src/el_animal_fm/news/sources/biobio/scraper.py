@@ -31,26 +31,16 @@ from el_animal_fm.news.infrastructure.text import (
     soup_from_html,
     text_or_empty as common_text_or_empty,
 )
+from el_animal_fm.news.sources.biobio.config import (
+    BASE_URL,
+    BIOBIO_AI_BOILERPLATE_PATTERNS,
+    DEFAULT_MAX_CATEGORY_PAGES,
+    DEFAULT_SLEEP_SECONDS,
+    PARSER_VERSION,
+    TIMEZONE,
+)
 from el_animal_fm.news.sources.biobio import discovery as discovery_module
 
-
-BASE_URL = "https://www.biobiochile.cl"
-
-PARSER_VERSION = "biobio_raw_v3_category_archives"
-TIMEZONE = "America/Santiago"
-
-DEFAULT_SLEEP_SECONDS = 0.5
-DEFAULT_MAX_CATEGORY_PAGES = 30
-
-BIOBIO_AI_BOILERPLATE_PATTERNS = [
-    r"\bver resumen\b",
-    r"\bresumen generado con una herramienta de inteligencia artificial desarrollada por biobiochile y revisado por el autor de este artículo\.?",
-    r"\bresumen generado con una herramienta de inteligencia artificial\.?",
-    r"\bherramienta de inteligencia artificial desarrollada por biobiochile\.?",
-    r"\bdesarrollada por biobiochile y revisado por el autor de este artículo\.?",
-    r"\bdesarrollada por biobiochile\.?",
-    r"\brevisado por el autor de este artículo\.?",
-]
 
 def remove_biobio_ai_boilerplate(value: str) -> str:
     """
