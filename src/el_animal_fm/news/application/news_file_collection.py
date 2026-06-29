@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
+
+from el_animal_fm.news.infrastructure.dates import date_from_dir_name
 
 
 DEFAULT_MEDIA_DIRS = ["biobio", "mostrador"]
@@ -49,10 +52,14 @@ def find_news_files(
     media_dirs: list[str],
     *,
     file_names: tuple[str, ...] = DEFAULT_NEWS_FILE_NAMES,
+    allowed_dates: set[date] | None = None,
 ) -> list[Path]:
     files: list[Path] = []
 
     for _, day_dir in iter_media_day_dirs(base_dir, media_dirs):
+        if allowed_dates is not None and date_from_dir_name(day_dir.name) not in allowed_dates:
+            continue
+
         news_file = find_news_file(day_dir, file_names=file_names)
 
         if news_file:

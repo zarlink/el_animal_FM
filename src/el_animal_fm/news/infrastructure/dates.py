@@ -39,6 +39,10 @@ def date_dir_name(target: date) -> str:
     return target.strftime("%d_%m_%Y")
 
 
+def date_from_dir_name(value: str) -> date:
+    return datetime.strptime(value, "%d_%m_%Y").date()
+
+
 def build_date_range(end_date: date, days_count: int) -> list[date]:
     return [end_date - timedelta(days=i) for i in range(days_count)]
 
