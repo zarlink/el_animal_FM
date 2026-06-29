@@ -1,28 +1,16 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 from pathlib import Path
 from typing import Any
 
+from el_animal_fm.news.application.news_file_collection import (
+    DEFAULT_MEDIA_DIRS,
+    find_news_file,
+    is_date_dir,
+)
 from el_animal_fm.news.application.news_normalizer import normalize_payload
-
-
-DEFAULT_MEDIA_DIRS = ["biobio", "mostrador"]
-
-
-def find_news_file(day_dir: Path) -> Path | None:
-    candidates = [
-        day_dir / "noticias_dia.txt",
-        day_dir / "noticias_dia",
-    ]
-
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            return candidate
-
-    return None
 
 
 def read_payload(path: Path) -> dict[str, Any]:
@@ -76,10 +64,7 @@ def process_media_dir(media_dir: Path, overwrite: bool = True) -> tuple[int, int
     ok = 0
 
     for day_dir in sorted(media_dir.iterdir()):
-        if not day_dir.is_dir():
-            continue
-
-        if not re.fullmatch(r"\d{2}_\d{2}_\d{4}", day_dir.name):
+        if not is_date_dir(day_dir):
             continue
 
         news_file = find_news_file(day_dir)
