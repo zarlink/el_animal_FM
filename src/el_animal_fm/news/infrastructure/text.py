@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html as html_lib
 import re
+import unicodedata
 from collections.abc import Callable
 from typing import Any
 
@@ -51,6 +52,36 @@ def normalize_text(
 
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def normalize_spaces(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text)
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def strip_html(value: Any) -> str:
+    """Convierte HTML o texto mixto en texto plano normalizado."""
+    if value is None:
+        return ""
+
+    text = str(value)
+    text = html_lib.unescape(text)
+    text = repair_mojibake(text)
+
+    if "<" in text and ">" in text:
+        soup = BeautifulSoup(text, "lxml")
+
+        for tag in soup(["script", "style", "noscript", "iframe", "svg"]):
+            tag.decompose()
+
+        text = soup.get_text(" ", strip=True)
+
+    text = html_lib.unescape(text)
+    text = repair_mojibake(text)
+    return normalize_spaces(text)
 
 
 def normalize_payload_texts(
