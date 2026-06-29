@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-from el_animal_fm.funds.application.cmf_config import CAPTCHA_VALIDATE_URL, CMF_URL
+from el_animal_fm.funds.application.cmf.cmf_config import CAPTCHA_VALIDATE_URL, CMF_URL
 
 
 def find_captcha_image_url(soup: BeautifulSoup, form) -> str:

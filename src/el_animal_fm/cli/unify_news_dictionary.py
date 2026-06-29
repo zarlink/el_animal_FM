@@ -4,8 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from el_animal_fm.news.application.news_file_collection import DEFAULT_MEDIA_DIRS
-from el_animal_fm.news.application.news_unifier import unify_news
+from el_animal_fm.news.application.shared.news_file_collection import DEFAULT_MEDIA_DIRS
+from el_animal_fm.news.application.unification.news_unifier import unify_news
 
 
 def main() -> None:

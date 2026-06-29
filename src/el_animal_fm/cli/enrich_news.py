@@ -5,11 +5,11 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from el_animal_fm.news.application.enrich_news_files import (
+from el_animal_fm.news.application.enrichment.enrich_news_files import (
     discover_news_files,
     enrich_files_parallel,
 )
-from el_animal_fm.news.application.enrichment_config import (
+from el_animal_fm.news.application.enrichment.enrichment_config import (
     DEFAULT_CANDIDATES_FILE,
     DEFAULT_DICTIONARY_DIR,
     DEFAULT_DICTIONARY_VERSION,
@@ -18,7 +18,7 @@ from el_animal_fm.news.application.enrichment_config import (
     DEFAULT_SOURCES,
     FAMILIES,
 )
-from el_animal_fm.news.application.enrichment_dictionaries import (
+from el_animal_fm.news.application.enrichment.enrichment_dictionaries import (
     compile_dictionaries,
     deduplicate_dictionaries,
     load_candidates_file,

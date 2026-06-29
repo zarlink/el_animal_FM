@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from el_animal_fm.funds.application.cmf_config import FUND_CATALOG
-from el_animal_fm.funds.application.cmf_text import normalize_text
+from el_animal_fm.funds.application.cmf.cmf_config import FUND_CATALOG
+from el_animal_fm.funds.application.cmf.cmf_text import normalize_text
 from el_animal_fm.funds.domain.models import FundOption
 from el_animal_fm.funds.infrastructure.cmf_form_parser import get_cmf_fund_options
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import sys
 
-from el_animal_fm.funds.application.cmf_config import FUND_CATALOG
-from el_animal_fm.funds.application.cmf_text import normalize_text
-from el_animal_fm.funds.application.fund_catalog import (
+from el_animal_fm.funds.application.cmf.cmf_config import FUND_CATALOG
+from el_animal_fm.funds.application.cmf.cmf_text import normalize_text
+from el_animal_fm.funds.application.catalog.fund_catalog import (
     print_available_catalog,
     resolve_fund_from_form,
 )

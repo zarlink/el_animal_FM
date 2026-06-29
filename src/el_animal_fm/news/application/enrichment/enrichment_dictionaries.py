@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from el_animal_fm.news.application.dictionary_matching import (
+from el_animal_fm.news.application.shared.dictionary_matching import (
     normalize_for_match,
     safe_float,
     term_to_pattern,
 )
-from el_animal_fm.news.application.enrichment_config import (
+from el_animal_fm.news.application.enrichment.enrichment_config import (
     DEFAULT_SEED_TERMS,
     FAMILIES,
     FAMILY_ALIASES,

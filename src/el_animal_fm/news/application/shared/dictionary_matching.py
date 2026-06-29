@@ -6,7 +6,7 @@ import re
 import unicodedata
 from typing import Any
 
-from el_animal_fm.news.application.enrichment_config import PHRASE_NORMALIZATIONS
+from el_animal_fm.news.application.enrichment.enrichment_config import PHRASE_NORMALIZATIONS
 
 
 def strip_accents(value: str) -> str:

@@ -5,12 +5,12 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from el_animal_fm.news.application.news_file_collection import (
+from el_animal_fm.news.application.shared.news_file_collection import (
     DEFAULT_MEDIA_DIRS,
     find_news_file,
     is_date_dir,
 )
-from el_animal_fm.news.application.news_normalizer import normalize_payload
+from el_animal_fm.news.application.normalization.news_normalizer import normalize_payload
 
 
 def read_payload(path: Path) -> dict[str, Any]:

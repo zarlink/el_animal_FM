@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from el_animal_fm.news.application.dictionary_config import (
+from el_animal_fm.news.application.dictionary.dictionary_config import (
     AMBIGUOUS_MARKET_SEEDS,
     AMOUNT_CONTEXT_SEEDS,
     AMOUNT_SEEDS,
@@ -21,7 +21,7 @@ from el_animal_fm.news.application.dictionary_config import (
     POLITICAL_RISK_SEEDS,
     SOCIAL_SECURITY_NOISE_SEEDS,
 )
-from el_animal_fm.news.application.dictionary_text import clean
+from el_animal_fm.news.application.dictionary.dictionary_text import clean
 
 
 def should_use_for_financial_dictionary(a: dict) -> bool:

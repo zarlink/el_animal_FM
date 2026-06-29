@@ -11,7 +11,7 @@ from typing import Any
 
 import requests
 
-from el_animal_fm.news.application.source_adapter import NewsSourceAdapter
+from el_animal_fm.news.application.download.source_adapter import NewsSourceAdapter
 from el_animal_fm.news.domain.models import DiscoveredUrl
 from el_animal_fm.news.infrastructure import storage as common_storage
 from el_animal_fm.news.infrastructure.dates import (

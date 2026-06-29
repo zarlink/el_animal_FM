@@ -6,20 +6,20 @@ import time
 from datetime import date
 from pathlib import Path
 
-from el_animal_fm.funds.application.cmf_config import (
+from el_animal_fm.funds.application.cmf.cmf_config import (
     DEFAULT_CAPTCHA_NAME,
     DEFAULT_DEBUG_DIR,
     DEFAULT_DOWNLOAD_DIR,
     MAX_DAYS_PER_REQUEST,
 )
-from el_animal_fm.funds.application.cmf_dates import (
+from el_animal_fm.funds.application.cmf.cmf_dates import (
     ask_date,
     build_ranges,
     format_cmf_date,
     parse_user_date,
 )
-from el_animal_fm.funds.application.download_fund_data import download_one_range
-from el_animal_fm.funds.application.fund_selection import resolve_funds_for_run
+from el_animal_fm.funds.application.download.download_fund_data import download_one_range
+from el_animal_fm.funds.application.catalog.fund_selection import resolve_funds_for_run
 from el_animal_fm.funds.infrastructure.cmf_storage import write_summary
 
 

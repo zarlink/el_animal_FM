@@ -8,10 +8,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from el_animal_fm.news.application.enrichment_config import DEFAULT_INPUT_NAME
-from el_animal_fm.news.application.enrichment_dictionaries import TermEntry
-from el_animal_fm.news.application.news_file_collection import find_news_files
-from el_animal_fm.news.application.news_enrichment import enrich_article
+from el_animal_fm.news.application.enrichment.enrichment_config import DEFAULT_INPUT_NAME
+from el_animal_fm.news.application.enrichment.enrichment_dictionaries import TermEntry
+from el_animal_fm.news.application.shared.news_file_collection import find_news_files
+from el_animal_fm.news.application.enrichment.news_enrichment import enrich_article
 
 
 def discover_news_files(

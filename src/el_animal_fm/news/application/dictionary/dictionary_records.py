@@ -5,16 +5,16 @@ import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 
-from el_animal_fm.news.application.dictionary_classifier import (
+from el_animal_fm.news.application.dictionary.dictionary_classifier import (
     classify_text_families,
     should_use_for_financial_dictionary,
 )
-from el_animal_fm.news.application.dictionary_config import (
+from el_animal_fm.news.application.dictionary.dictionary_config import (
     DEFAULT_RECORD_WORKERS,
     RECORD_CHUNKSIZE,
     RECORD_LOG_EVERY,
 )
-from el_animal_fm.news.application.dictionary_text import build_dictionary_text
+from el_animal_fm.news.application.dictionary.dictionary_text import build_dictionary_text
 
 
 logging.basicConfig(

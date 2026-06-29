@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from el_animal_fm.news.application.news_file_collection import find_news_files
+from el_animal_fm.news.application.shared.news_file_collection import find_news_files
 from el_animal_fm.news.infrastructure.text import strip_html
 
 

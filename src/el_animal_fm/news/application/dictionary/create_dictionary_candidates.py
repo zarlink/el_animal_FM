@@ -3,21 +3,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from el_animal_fm.news.application.dictionary_candidate_extractor import (
+from el_animal_fm.news.application.dictionary.dictionary_candidate_extractor import (
     extract_ngrams,
     extract_tfidf,
     extract_yake_keywords,
 )
-from el_animal_fm.news.application.dictionary_clustering import build_embedding_clusters
-from el_animal_fm.news.application.dictionary_config import (
+from el_animal_fm.news.application.dictionary.dictionary_clustering import build_embedding_clusters
+from el_animal_fm.news.application.dictionary.dictionary_config import (
     DEFAULT_RECORD_WORKERS,
     RECORD_CHUNKSIZE,
     RECORD_LOG_EVERY,
     get_stopwords,
 )
-from el_animal_fm.news.application.dictionary_entities import extract_entities
-from el_animal_fm.news.application.dictionary_records import build_records_parallel
-from el_animal_fm.news.application.dictionary_report import (
+from el_animal_fm.news.application.dictionary.dictionary_entities import extract_entities
+from el_animal_fm.news.application.dictionary.dictionary_records import build_records_parallel
+from el_animal_fm.news.application.dictionary.dictionary_report import (
     build_dictionary_report,
     make_json_serializable,
 )

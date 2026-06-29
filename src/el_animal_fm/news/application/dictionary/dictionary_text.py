@@ -4,7 +4,7 @@ import html
 import re
 import unicodedata
 
-from el_animal_fm.news.application.dictionary_config import PHRASE_NORMALIZATIONS
+from el_animal_fm.news.application.dictionary.dictionary_config import PHRASE_NORMALIZATIONS
 
 
 def clean(text: str) -> str:

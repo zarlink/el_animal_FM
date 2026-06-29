@@ -7,8 +7,8 @@ from pathlib import Path
 
 import requests
 
-from el_animal_fm.funds.application.cmf_dates import safe_date_for_filename
-from el_animal_fm.funds.application.cmf_text import slugify
+from el_animal_fm.funds.application.cmf.cmf_dates import safe_date_for_filename
+from el_animal_fm.funds.application.cmf.cmf_text import slugify
 from el_animal_fm.funds.domain.models import FundOption
 
 

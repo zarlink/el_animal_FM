@@ -4,8 +4,8 @@ from collections import Counter
 
 import spacy
 
-from el_animal_fm.news.application.dictionary_config import ENTITY_ALIASES, ENTITY_STOP
-from el_animal_fm.news.application.dictionary_text import clean
+from el_animal_fm.news.application.dictionary.dictionary_config import ENTITY_ALIASES, ENTITY_STOP
+from el_animal_fm.news.application.dictionary.dictionary_text import clean
 
 
 def normalize_entity_text(value: str) -> str:

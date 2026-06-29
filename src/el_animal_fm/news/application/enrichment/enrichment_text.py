@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from el_animal_fm.news.application.dictionary_matching import normalize_for_match
+from el_animal_fm.news.application.shared.dictionary_matching import normalize_for_match
 
 
 def get_article_raw(article: dict[str, Any]) -> dict[str, Any]:

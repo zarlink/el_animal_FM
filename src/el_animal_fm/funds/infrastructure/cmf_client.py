@@ -3,7 +3,7 @@ from __future__ import annotations
 import requests
 from bs4 import BeautifulSoup
 
-from el_animal_fm.funds.application.cmf_config import CMF_URL
+from el_animal_fm.funds.application.cmf.cmf_config import CMF_URL
 
 
 def get_soup(html: str) -> BeautifulSoup:

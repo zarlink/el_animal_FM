@@ -5,8 +5,8 @@ from collections import Counter
 import yake
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 
-from el_animal_fm.news.application.dictionary_config import TOKEN_PATTERN, get_stopwords
-from el_animal_fm.news.application.dictionary_text import clean
+from el_animal_fm.news.application.dictionary.dictionary_config import TOKEN_PATTERN, get_stopwords
+from el_animal_fm.news.application.dictionary.dictionary_text import clean
 
 
 STOP = get_stopwords()

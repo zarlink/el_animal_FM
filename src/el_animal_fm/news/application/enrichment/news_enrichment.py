@@ -5,10 +5,10 @@ import re
 from datetime import datetime
 from typing import Any
 
-from el_animal_fm.news.application.dictionary_matching import normalize_for_match, strip_accents
-from el_animal_fm.news.application.enrichment_config import FAMILIES
-from el_animal_fm.news.application.enrichment_dictionaries import TermEntry
-from el_animal_fm.news.application.enrichment_text import build_classification_text, get_article_raw
+from el_animal_fm.news.application.shared.dictionary_matching import normalize_for_match, strip_accents
+from el_animal_fm.news.application.enrichment.enrichment_config import FAMILIES
+from el_animal_fm.news.application.enrichment.enrichment_dictionaries import TermEntry
+from el_animal_fm.news.application.enrichment.enrichment_text import build_classification_text, get_article_raw
 
 
 def parse_published_date(raw: dict[str, Any]) -> str:

@@ -4,7 +4,7 @@ from datetime import date
 
 import requests
 
-from el_animal_fm.news.application.source_adapter import NewsSourceAdapter, PreloadByDate
+from el_animal_fm.news.application.download.source_adapter import NewsSourceAdapter, PreloadByDate
 from el_animal_fm.news.domain.models import DiscoveredUrl
 from el_animal_fm.news.sources.mostrador.config import (
     DAYS_BACK_EXAMPLE,

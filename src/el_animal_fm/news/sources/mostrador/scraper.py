@@ -33,7 +33,7 @@ __all__ = [
 
 
 def main() -> None:
-    from el_animal_fm.news.application.downloader import run_cli
+    from el_animal_fm.news.application.download.downloader import run_cli
     from el_animal_fm.news.sources.mostrador.adapter import create_adapter
 
     run_cli(create_adapter())

@@ -7,8 +7,8 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 
-from el_animal_fm.news.application.dictionary_classifier import should_use_for_financial_dictionary
-from el_animal_fm.news.application.dictionary_text import build_embedding_text
+from el_animal_fm.news.application.dictionary.dictionary_classifier import should_use_for_financial_dictionary
+from el_animal_fm.news.application.dictionary.dictionary_text import build_embedding_text
 
 
 def build_embedding_clusters(articles: list[dict]) -> tuple[np.ndarray, dict[str, list[dict]]]:

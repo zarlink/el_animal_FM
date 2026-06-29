@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from el_animal_fm.news.application.dictionary_config import (
+from el_animal_fm.news.application.dictionary.dictionary_config import (
     DEFAULT_INPUT_PATH,
     DEFAULT_OUTPUT_PATH,
     DEFAULT_RECORD_WORKERS,
@@ -46,7 +46,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from el_animal_fm.news.application.create_dictionary_candidates import (
+    from el_animal_fm.news.application.dictionary.create_dictionary_candidates import (
         create_dictionary_candidates,
     )
 

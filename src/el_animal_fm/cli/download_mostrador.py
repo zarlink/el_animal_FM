@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from el_animal_fm.news.application.download_mostrador import run
+from el_animal_fm.news.application.download.download_mostrador import run
 
 
 def main() -> None:

@@ -4,14 +4,14 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from el_animal_fm.funds.application.cmf_config import DOWNLOAD_URL
-from el_animal_fm.funds.application.cmf_dates import format_cmf_date, safe_date_for_filename
-from el_animal_fm.funds.application.cmf_payload import (
+from el_animal_fm.funds.application.cmf.cmf_config import DOWNLOAD_URL
+from el_animal_fm.funds.application.cmf.cmf_dates import format_cmf_date, safe_date_for_filename
+from el_animal_fm.funds.application.cmf.cmf_payload import (
     collect_payload,
     infer_and_fill_fields,
     print_diagnostics,
 )
-from el_animal_fm.funds.application.cmf_text import slugify
+from el_animal_fm.funds.application.cmf.cmf_text import slugify
 from el_animal_fm.funds.domain.models import FundOption
 from el_animal_fm.funds.infrastructure.cmf_captcha import (
     download_captcha,

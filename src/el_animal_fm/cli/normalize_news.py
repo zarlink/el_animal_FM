@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from el_animal_fm.news.application.normalize_news_files import (
+from el_animal_fm.news.application.normalization.normalize_news_files import (
     DEFAULT_MEDIA_DIRS,
     process_media_dir,
 )
