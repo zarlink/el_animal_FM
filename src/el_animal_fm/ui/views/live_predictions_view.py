@@ -11,11 +11,12 @@ from el_animal_fm.ui.dev.mock_dashboard_data import (
     MOCK_SIGNAL_DISTRIBUTION,
     MOCK_SYSTEM_STATUS,
 )
+from el_animal_fm.ui.widgets.entry_score_chart import EntryScoreChart
 from el_animal_fm.ui.widgets.event_log_panel import EventLogPanel
 from el_animal_fm.ui.widgets.execution_console import ExecutionConsole
 from el_animal_fm.ui.widgets.fund_signal_card import FundSignalCard
 from el_animal_fm.ui.widgets.section_panel import SectionPanel
-from el_animal_fm.ui.widgets.simple_chart_panel import SimpleChartPanel
+from el_animal_fm.ui.widgets.signal_distribution_chart import SignalDistributionChart
 from el_animal_fm.ui.widgets.system_status_panel import SystemStatusPanel
 
 
@@ -80,10 +81,10 @@ class LivePredictionsView(QWidget):
         console = ExecutionConsole()
         console.set_lines(MOCK_CONSOLE_LINES)
 
-        signal_distribution = SimpleChartPanel()
+        signal_distribution = SignalDistributionChart()
         signal_distribution.set_rows(MOCK_SIGNAL_DISTRIBUTION)
 
-        entry_score = SimpleChartPanel()
+        entry_score = EntryScoreChart()
         entry_score.set_rows(MOCK_ENTRY_SCORE_MAP)
 
         layout.addWidget(SectionPanel("Event Log", event_log), stretch=2)

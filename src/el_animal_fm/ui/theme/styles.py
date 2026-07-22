@@ -171,4 +171,102 @@ QWidget {
     color: #d7faff;
     font-size: 13px;
 }
+
+#PipelineTitle {
+    color: #ff9500;
+    font-size: 24px;
+    font-weight: 900;
+}
+
+#PipelineSubtitle,
+#PipelinePanelTitle,
+#PipelineFieldLabel {
+    color: #18dce8;
+    font-weight: 800;
+}
+
+#PipelineSubtitle {
+    color: #d7faff;
+}
+
+#PipelineInnerPanel {
+    background: #050a0c;
+    border: 1px solid #173238;
+}
+
+#PipelineSeparator {
+    color: #173238;
+    background: #173238;
+    max-height: 1px;
+}
+
+#PipelineStageTabs::tab {
+    background: #061012;
+    border: 1px solid #173238;
+    color: #18dce8;
+    min-height: 30px;
+    padding: 4px 18px;
+}
+
+#PipelineStageTabs::tab:selected {
+    background: #120d08;
+    border-color: #ff9500;
+    color: #ff9500;
+}
+
+#PipelineCheck {
+    color: #d7faff;
+    spacing: 8px;
+}
+
+#PipelineCheck::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #18dce8;
+    background: #061012;
+}
+
+#PipelineCheck::indicator:checked {
+    background: #18dce8;
+}
+
+#PipelineInput {
+    background: #061012;
+    border: 1px solid #173238;
+    color: #d7faff;
+    min-height: 28px;
+    padding-left: 8px;
+}
+
+#PipelineValue {
+    color: #d7faff;
+    font-weight: 700;
+}
+
+#PipelinePrimaryButton,
+#PipelineButton {
+    background: #061012;
+    border: 1px solid #18dce8;
+    color: #18dce8;
+    font-weight: 800;
+}
+
+#PipelinePrimaryButton {
+    background: #120d08;
+    border-color: #ff9500;
+    color: #ff9500;
+}
+
+#PipelinePrimaryButton:hover,
+#PipelineButton:hover {
+    background: #092024;
+}
+
+#PipelineConsole {
+    background: #020506;
+    border: none;
+    color: #b9f8ff;
+    font-family: "DejaVu Sans Mono", "Consolas", monospace;
+    font-size: 12px;
+}
 """
