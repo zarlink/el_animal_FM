@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSpinBox,
-    QTabBar,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -25,44 +24,8 @@ class PipelineMonitorView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        layout.addWidget(self._build_heading())
-        layout.addWidget(self._build_stage_tabs())
         layout.addLayout(self._build_control_band())
         layout.addWidget(self._build_console(), stretch=1)
-
-    def _build_heading(self) -> QWidget:
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        title = QLabel("PIPELINE MONITOR")
-        title.setObjectName("PipelineTitle")
-
-        subtitle = QLabel("EJECUCION DE PIPELINE - DESCARGA DE NOTICIAS")
-        subtitle.setObjectName("PipelineSubtitle")
-
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        return container
-
-    def _build_stage_tabs(self) -> QTabBar:
-        tabs = QTabBar()
-        tabs.setObjectName("PipelineStageTabs")
-        tabs.setDrawBase(False)
-        tabs.setExpanding(True)
-
-        for label in (
-            "DESCARGA NOTICIAS",
-            "ENRIQUECIMIENTO",
-            "CMF DATA",
-            "FEATURES",
-            "XGBOOST",
-            "PREDICCION LIVE",
-        ):
-            tabs.addTab(label)
-
-        return tabs
 
     def _build_control_band(self) -> QHBoxLayout:
         layout = QHBoxLayout()

@@ -172,21 +172,10 @@ QWidget {
     font-size: 13px;
 }
 
-#PipelineTitle {
-    color: #ff9500;
-    font-size: 24px;
-    font-weight: 900;
-}
-
-#PipelineSubtitle,
 #PipelinePanelTitle,
 #PipelineFieldLabel {
     color: #18dce8;
     font-weight: 800;
-}
-
-#PipelineSubtitle {
-    color: #d7faff;
 }
 
 #PipelineInnerPanel {
@@ -198,20 +187,6 @@ QWidget {
     color: #173238;
     background: #173238;
     max-height: 1px;
-}
-
-#PipelineStageTabs::tab {
-    background: #061012;
-    border: 1px solid #173238;
-    color: #18dce8;
-    min-height: 30px;
-    padding: 4px 18px;
-}
-
-#PipelineStageTabs::tab:selected {
-    background: #120d08;
-    border-color: #ff9500;
-    color: #ff9500;
 }
 
 #PipelineCheck {
