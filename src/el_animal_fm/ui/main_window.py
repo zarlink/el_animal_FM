@@ -15,6 +15,7 @@ from el_animal_fm.ui.dev.mock_dashboard_data import MOCK_SECONDARY_VIEWS
 from el_animal_fm.ui.theme.styles import BASE_STYLESHEET
 from el_animal_fm.ui.views.live_predictions_view import LivePredictionsView
 from el_animal_fm.ui.views.mock_detail_view import MockDetailView
+from el_animal_fm.ui.views.news_enrichment_view import NewsEnrichmentView
 from el_animal_fm.ui.views.pipeline_monitor_view import PipelineMonitorView
 from el_animal_fm.ui.widgets.header_bar import HeaderBar
 
@@ -61,8 +62,9 @@ class MainWindow(QMainWindow):
     def _build_stack(self) -> QStackedWidget:
         self._stack.addWidget(LivePredictionsView())
         self._stack.addWidget(PipelineMonitorView())
+        self._stack.addWidget(NewsEnrichmentView())
 
-        for label in _VIEW_LABELS[2:]:
+        for label in _VIEW_LABELS[3:]:
             self._stack.addWidget(MockDetailView(label, MOCK_SECONDARY_VIEWS[label]))
 
         return self._stack

@@ -244,4 +244,130 @@ QWidget {
     font-family: "DejaVu Sans Mono", "Consolas", monospace;
     font-size: 12px;
 }
+
+#NewsPanel {
+    background: #050a0c;
+    border: 1px solid #17646b;
+}
+
+#NewsPanelTitle,
+#NewsPanelIndex {
+    color: #18dce8;
+    font-size: 16px;
+    font-weight: 900;
+}
+
+#NewsPanelIndex {
+    background: #092024;
+    border: 1px solid #18dce8;
+    padding: 3px 8px;
+}
+
+#NewsFieldLabel,
+#NewsScriptLabel,
+#NewsStatLabel {
+    color: #18dce8;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+#NewsScriptLabel {
+    border-top: 1px solid #173238;
+    padding-top: 6px;
+}
+
+#NewsSeparator {
+    color: #173238;
+    background: #173238;
+    max-height: 1px;
+}
+
+#NewsInput {
+    background: #061012;
+    border: 1px solid #24535a;
+    color: #d7faff;
+    min-height: 27px;
+    padding: 0 6px;
+}
+
+#NewsInput::drop-down {
+    border: none;
+    width: 18px;
+}
+
+#NewsCheck {
+    color: #d7faff;
+    spacing: 6px;
+    font-size: 11px;
+}
+
+#NewsCheck::indicator {
+    width: 14px;
+    height: 14px;
+    background: #061012;
+    border: 1px solid #18dce8;
+}
+
+#NewsCheck::indicator:checked {
+    background: #18dce8;
+}
+
+#NewsPrimaryButton,
+#NewsButton {
+    background: #061012;
+    border: 1px solid #18dce8;
+    color: #18dce8;
+    font-weight: 900;
+    padding: 4px 10px;
+}
+
+#NewsPrimaryButton {
+    background: #160e06;
+    border: 2px solid #ff9500;
+    color: #ff9500;
+}
+
+#NewsPrimaryButton:hover,
+#NewsButton:hover {
+    background: #092024;
+}
+
+#NewsStat,
+#NewsErrorStat {
+    background: #061012;
+    border: 1px solid #17646b;
+}
+
+#NewsErrorStat {
+    border-color: #d94c12;
+}
+
+#NewsStatValue {
+    color: #65ff5f;
+    font-size: 14px;
+    font-weight: 900;
+}
+
+#NewsCaptcha {
+    background: #080d10;
+    border: 1px solid #4d5358;
+    color: #d8e0e4;
+    font-size: 18px;
+    letter-spacing: 4px;
+    min-height: 40px;
+}
+
+#NewsSuccess {
+    color: #65ff5f;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+#NewsConsole {
+    background: #020506;
+    border: 1px solid #173238;
+    color: #65ff5f;
+    font-family: "DejaVu Sans Mono", "Consolas", monospace;
+    font-size: 11px;
+}
 """
