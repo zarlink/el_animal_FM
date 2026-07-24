@@ -370,4 +370,59 @@ QWidget {
     font-family: "DejaVu Sans Mono", "Consolas", monospace;
     font-size: 11px;
 }
+
+#DictionarySummary {
+    background: #061012;
+    border: 1px solid #24535a;
+    color: #d7faff;
+    padding: 9px;
+    font-family: "DejaVu Sans Mono", "Consolas", monospace;
+    font-size: 11px;
+}
+
+#DictionaryMuted {
+    color: #8aa9ad;
+    font-size: 10px;
+}
+
+#DictionaryStatus {
+    color: #65ff5f;
+    font-weight: 900;
+    font-size: 11px;
+}
+
+#DictionaryProgress {
+    background: #061012;
+    border: 1px solid #24535a;
+    color: #d7faff;
+    min-height: 28px;
+    text-align: center;
+    font-weight: 900;
+}
+
+#DictionaryProgress::chunk {
+    background: #18dce8;
+}
+
+#DictionaryTable {
+    background: #020708;
+    alternate-background-color: #061012;
+    border: 1px solid #24535a;
+    color: #d7faff;
+    gridline-color: #173238;
+    font-family: "DejaVu Sans Mono", "Consolas", monospace;
+    font-size: 10px;
+    selection-background-color: #12353a;
+}
+
+#DictionaryTable QHeaderView::section {
+    background: #092024;
+    border: none;
+    border-right: 1px solid #24535a;
+    border-bottom: 1px solid #18dce8;
+    color: #18dce8;
+    padding: 5px;
+    font-size: 9px;
+    font-weight: 900;
+}
 """
