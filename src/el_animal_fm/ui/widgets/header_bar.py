@@ -20,7 +20,7 @@ class HeaderBar(QFrame):
 
         title = QLabel("EL ANIMAL - Centro de Decisiones")
         title.setObjectName("AppTitle")
-        subtitle = QLabel("LIVE PREDICTIONS / TAB 01")
+        subtitle = QLabel("Analisis Directo / Versión 0.5")
         subtitle.setObjectName("AppSubtitle")
 
         title_layout.addWidget(title)
@@ -28,8 +28,8 @@ class HeaderBar(QFrame):
 
         layout.addWidget(title_block, stretch=1)
         layout.addWidget(self._build_header_chip("---- -- --"))
-        layout.addWidget(self._build_header_button("UPDATE DATE"))
-        layout.addWidget(self._build_header_button("RUN LIVE PREDICTION", primary=True))
+        layout.addWidget(self._build_header_button("Actualizar Fecha"))
+        layout.addWidget(self._build_header_button("Ejecutar Predicción", primary=True))
 
     def _build_header_chip(self, text: str) -> QLabel:
         label = QLabel(text)

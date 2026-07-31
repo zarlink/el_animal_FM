@@ -425,4 +425,94 @@ QWidget {
     font-size: 9px;
     font-weight: 900;
 }
+
+#ModelFundCard,
+#ModelSubPanel {
+    background: #061012;
+    border: 1px solid #24535a;
+}
+
+#ModelFundCard[selected="true"] {
+    background: #120d08;
+    border: 2px solid #ff9500;
+}
+
+#ModelFundName {
+    background: transparent;
+    border: none;
+    color: #18dce8;
+    font-size: 11px;
+    font-weight: 900;
+    text-align: left;
+}
+
+#ModelFundName:hover {
+    color: #ff9500;
+}
+
+#ModelMuted {
+    color: #8aa9ad;
+    font-family: "DejaVu Sans Mono", "Consolas", monospace;
+    font-size: 10px;
+}
+
+#ModelSuccess {
+    color: #65ff5f;
+    font-size: 10px;
+    font-weight: 900;
+}
+
+#ModelFundTabs,
+#ModelOptunaTabs {
+    background: #020708;
+}
+
+#ModelFundTabs::tab,
+#ModelOptunaTabs::tab {
+    background: #061012;
+    border: 1px solid #24535a;
+    color: #8aa9ad;
+    min-height: 26px;
+    padding: 0 10px;
+    font-size: 9px;
+}
+
+#ModelFundTabs::tab:selected,
+#ModelOptunaTabs::tab:selected {
+    background: #092024;
+    border-color: #18dce8;
+    color: #18dce8;
+}
+
+#ModelOptunaTabs::tab:selected {
+    background: #120d08;
+    border-color: #ff9500;
+    color: #ff9500;
+}
+
+#ModelSearchSpace {
+    background: #061012;
+    border: 1px solid #24535a;
+    color: #18dce8;
+    padding: 8px;
+    font-family: "DejaVu Sans Mono", "Consolas", monospace;
+    font-size: 10px;
+}
+
+#ModelTimeline {
+    background: #020708;
+    border: 1px solid #173238;
+}
+
+#ModelTimelineTrain {
+    color: #18dce8;
+    font-size: 10px;
+    font-weight: 900;
+}
+
+#ModelTimelineTest {
+    color: #ff9500;
+    font-size: 10px;
+    font-weight: 900;
+}
 """

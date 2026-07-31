@@ -243,7 +243,14 @@ def discover_dates_from_page(
     soup = soup_from_html(html)
     positions_by_date: dict[date, int] = {}
 
-    for anchor in soup.find_all("a", href=True):
+    # En categoria/dia los enlaces del listado viven en tarjetas d-tag-card.
+    # Limitar el análisis a esas tarjetas evita que noticias recientes del
+    # sidebar ("Noticias del día") impidan detectar que la paginación ya
+    # avanzó más atrás que el rango solicitado.
+    listing_anchors = soup.select(".d-tag-card a[href]")
+    anchors = listing_anchors or soup.find_all("a", href=True)
+
+    for anchor in anchors:
         url = normalize_url(urljoin(BASE_URL, anchor["href"]))
 
         if not is_elmostrador_article_url(url):
@@ -347,7 +354,13 @@ def discover_from_categoria_dia_range(
         for target, items in discovered_by_date.items():
             all_items[target] = merge_discoveries(all_items[target], items)
 
-        if page_number > 1 and page_total == 0 and page_dates and max(page_dates) < oldest_target:
+        if page_number > 1 and page_dates and max(page_dates) < oldest_target:
+            newest_page_date = max(page_dates)
+            print(
+                "  Fin de paginación útil: la fecha más reciente del listado "
+                f"({newest_page_date.isoformat()}) es anterior al inicio "
+                f"solicitado ({oldest_target.isoformat()})."
+            )
             break
 
     return all_items

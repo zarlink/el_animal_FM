@@ -11,11 +11,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from el_animal_fm.ui.dev.mock_dashboard_data import MOCK_SECONDARY_VIEWS
 from el_animal_fm.ui.theme.styles import BASE_STYLESHEET
 from el_animal_fm.ui.views.dictionary_lab_view import DictionaryLabView
 from el_animal_fm.ui.views.live_predictions_view import LivePredictionsView
-from el_animal_fm.ui.views.mock_detail_view import MockDetailView
+from el_animal_fm.ui.views.models_view import ModelsView
 from el_animal_fm.ui.views.news_enrichment_view import NewsEnrichmentView
 from el_animal_fm.ui.views.pipeline_monitor_view import PipelineMonitorView
 from el_animal_fm.ui.widgets.header_bar import HeaderBar
@@ -65,9 +64,7 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(PipelineMonitorView())
         self._stack.addWidget(NewsEnrichmentView())
         self._stack.addWidget(DictionaryLabView())
-
-        for label in _VIEW_LABELS[4:]:
-            self._stack.addWidget(MockDetailView(label, MOCK_SECONDARY_VIEWS[label]))
+        self._stack.addWidget(ModelsView())
 
         return self._stack
 
@@ -75,9 +72,9 @@ class MainWindow(QMainWindow):
         self._tabs.currentChanged.connect(self._stack.setCurrentIndex)
 
 _VIEW_LABELS: Sequence[str] = (
-    "Live Predictions",
-    "Pipeline Monitor",
-    "News Enrichment",
-    "Dictionary Lab",
-    "Models",
+    "Análisis en Directo",
+    "Gestor de Noticias - Monitor",
+    "Enriquecedor Noticias",
+    "Laboratorio de Palabras",
+    "Modelos",
 )
