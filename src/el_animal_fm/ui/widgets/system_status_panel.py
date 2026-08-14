@@ -14,13 +14,13 @@ class SystemStatusPanel(QWidget):
         layout.setVerticalSpacing(12)
 
         rows = (
-            "Model loaded",
-            "BioBio sources",
-            "Mostrador sources",
-            "Feature sets",
-            "Funds analyzed",
-            "Live signals",
-            "Warnings",
+            "Modelos Cargados:",
+            "Páginas Bio Bio",
+            "Páginas Mostrador",
+            "Total Parámetros",
+            "Fondos Analizados",
+            "Señales en VIVO",
+            "Advertencias",
         )
 
         for row, label_text in enumerate(rows):

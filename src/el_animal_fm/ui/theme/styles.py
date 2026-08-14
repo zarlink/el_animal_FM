@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+
+_THEME_ICON_DIR = Path(__file__).with_name("icons").as_posix()
+
 
 BASE_STYLESHEET = """
 QMainWindow {
@@ -213,6 +218,72 @@ QWidget {
     padding-left: 8px;
 }
 
+QSpinBox#PipelineInput,
+QDoubleSpinBox#PipelineInput,
+QSpinBox#NewsInput,
+QDoubleSpinBox#NewsInput {
+    padding-right: 20px;
+}
+
+QSpinBox#PipelineInput::up-button,
+QDoubleSpinBox#PipelineInput::up-button,
+QSpinBox#NewsInput::up-button,
+QDoubleSpinBox#NewsInput::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 18px;
+    background: #18dce8;
+    border: none;
+    border-left: 1px solid #24535a;
+    border-bottom: 1px solid #24535a;
+}
+
+QSpinBox#PipelineInput::down-button,
+QDoubleSpinBox#PipelineInput::down-button,
+QSpinBox#NewsInput::down-button,
+QDoubleSpinBox#NewsInput::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 18px;
+    background: #18dce8;
+    border: none;
+    border-left: 1px solid #24535a;
+}
+
+QSpinBox#PipelineInput::up-button:hover,
+QDoubleSpinBox#PipelineInput::up-button:hover,
+QSpinBox#PipelineInput::down-button:hover,
+QDoubleSpinBox#PipelineInput::down-button:hover,
+QSpinBox#NewsInput::up-button:hover,
+QDoubleSpinBox#NewsInput::up-button:hover,
+QSpinBox#NewsInput::down-button:hover,
+QDoubleSpinBox#NewsInput::down-button:hover {
+    background: #ff9500;
+}
+
+QSpinBox#PipelineInput::up-button:pressed,
+QDoubleSpinBox#PipelineInput::up-button:pressed,
+QSpinBox#PipelineInput::down-button:pressed,
+QDoubleSpinBox#PipelineInput::down-button:pressed,
+QSpinBox#NewsInput::up-button:pressed,
+QDoubleSpinBox#NewsInput::up-button:pressed,
+QSpinBox#NewsInput::down-button:pressed,
+QDoubleSpinBox#NewsInput::down-button:pressed {
+    background: #ffbd4a;
+}
+
+QSpinBox#PipelineInput::up-arrow,
+QDoubleSpinBox#PipelineInput::up-arrow,
+QSpinBox#NewsInput::up-arrow,
+QDoubleSpinBox#NewsInput::up-arrow,
+QSpinBox#PipelineInput::down-arrow,
+QDoubleSpinBox#PipelineInput::down-arrow,
+QSpinBox#NewsInput::down-arrow,
+QDoubleSpinBox#NewsInput::down-arrow {
+    width: 7px;
+    height: 7px;
+}
+
 #PipelineValue {
     color: #d7faff;
     font-weight: 700;
@@ -293,6 +364,50 @@ QWidget {
 #NewsInput::drop-down {
     border: none;
     width: 18px;
+}
+
+QComboBox#NewsInput QAbstractItemView {
+    background: #061012;
+    alternate-background-color: #061012;
+    color: #d7faff;
+    border: 1px solid #18dce8;
+    outline: 0;
+    padding: 3px;
+    selection-background-color: #000000;
+    selection-color: #ffffff;
+}
+
+QComboBox#NewsInput QAbstractItemView::item {
+    background: #061012;
+    color: #d7faff;
+    min-height: 26px;
+    padding: 3px 8px;
+}
+
+QComboBox#NewsInput QAbstractItemView::item:selected {
+    background: #000000;
+    color: #ffffff;
+    border-left: 3px solid #ffffff;
+}
+
+QComboBox#NewsInput QAbstractItemView::item:hover,
+QComboBox#NewsInput QAbstractItemView::item:selected:hover {
+    background: #000000;
+    color: #ffffff;
+    border-left: 3px solid #ffffff;
+}
+
+CalendarDateEdit#NewsInput {
+    padding-right: 24px;
+}
+
+CalendarDateEdit#NewsInput::drop-down {
+    border: none;
+    width: 28px;
+}
+
+CalendarDateEdit#NewsInput::down-arrow {
+    image: none;
 }
 
 #NewsCheck {
@@ -432,6 +547,72 @@ QWidget {
     border: 1px solid #24535a;
 }
 
+#ModelsScroll,
+#ModelsScrollSurface {
+    background: transparent;
+    border: none;
+}
+
+#ModelsScroll QScrollBar:vertical {
+    background: #020708;
+    border: 1px solid #173238;
+    width: 11px;
+    margin: 0;
+}
+
+#ModelsScroll QScrollBar::handle:vertical {
+    background: #18dce8;
+    border: 1px solid #24535a;
+    min-height: 48px;
+}
+
+#ModelsScroll QScrollBar::add-line:vertical,
+#ModelsScroll QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+#ModelsScroll QScrollBar::add-page:vertical,
+#ModelsScroll QScrollBar::sub-page:vertical {
+    background: #020708;
+}
+
+#ModelsScroll QScrollBar:horizontal {
+    background: #020708;
+    border: 1px solid #173238;
+    height: 11px;
+    margin: 0;
+}
+
+#ModelsScroll QScrollBar::handle:horizontal {
+    background: #18dce8;
+    border: 1px solid #24535a;
+    min-width: 48px;
+}
+
+#ModelsScroll QScrollBar::add-line:horizontal,
+#ModelsScroll QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+#ModelTrainingPanel,
+#ModelConsolePanel {
+    background: #050a0c;
+    border: 1px solid #17646b;
+}
+
+#ModelTrainingOptions {
+    background: #061012;
+    border-left: 1px solid #173238;
+    padding-left: 8px;
+}
+
+#ModelScriptLabel {
+    color: #8aa9ad;
+    border-top: 1px solid #173238;
+    padding-top: 5px;
+    font-size: 10px;
+}
+
 #ModelFundCard[selected="true"] {
     background: #120d08;
     border: 2px solid #ff9500;
@@ -504,6 +685,39 @@ QWidget {
     border: 1px solid #173238;
 }
 
+#ModelDataSplit {
+    min-height: 18px;
+}
+
+#ModelDataSplit::groove:horizontal {
+    background: #ff9500;
+    border: 1px solid #173238;
+    height: 5px;
+}
+
+#ModelDataSplit::sub-page:horizontal {
+    background: #18dce8;
+    border: none;
+}
+
+#ModelDataSplit::add-page:horizontal {
+    background: #ff9500;
+    border: none;
+}
+
+#ModelDataSplit::handle:horizontal {
+    background: #ff9500;
+    border: 2px solid #050a0c;
+    width: 14px;
+    height: 14px;
+    margin: -6px 0;
+}
+
+#ModelDataSplit::handle:horizontal:hover {
+    background: #ffbd4a;
+    border-color: #18dce8;
+}
+
 #ModelTimelineTrain {
     color: #18dce8;
     font-size: 10px;
@@ -515,4 +729,24 @@ QWidget {
     font-size: 10px;
     font-weight: 900;
 }
+"""
+
+BASE_STYLESHEET += f"""
+QSpinBox#PipelineInput::up-arrow,
+QDoubleSpinBox#PipelineInput::up-arrow,
+QSpinBox#NewsInput::up-arrow,
+QDoubleSpinBox#NewsInput::up-arrow {{
+    image: url({_THEME_ICON_DIR}/spin_up.svg);
+    width: 8px;
+    height: 6px;
+}}
+
+QSpinBox#PipelineInput::down-arrow,
+QDoubleSpinBox#PipelineInput::down-arrow,
+QSpinBox#NewsInput::down-arrow,
+QDoubleSpinBox#NewsInput::down-arrow {{
+    image: url({_THEME_ICON_DIR}/spin_down.svg);
+    width: 8px;
+    height: 6px;
+}}
 """

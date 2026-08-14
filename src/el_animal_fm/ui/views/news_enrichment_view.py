@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from el_animal_fm.ui.widgets.calendar_date_edit import CalendarDateEdit
+
 
 class NewsEnrichmentView(QWidget):
     """Operational layout for normalization, enrichment and CMF downloads."""
@@ -237,7 +239,7 @@ class NewsEnrichmentView(QWidget):
 
     @staticmethod
     def _date_edit(value: date) -> QDateEdit:
-        field = QDateEdit(QDate(value.year, value.month, value.day))
+        field = CalendarDateEdit(QDate(value.year, value.month, value.day))
         field.setObjectName("NewsInput")
         field.setCalendarPopup(True)
         field.setDisplayFormat("yyyy-MM-dd")

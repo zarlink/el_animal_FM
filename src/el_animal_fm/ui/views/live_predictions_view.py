@@ -64,7 +64,7 @@ class LivePredictionsView(QWidget):
         status = SystemStatusPanel()
         status.set_status(MOCK_SYSTEM_STATUS)
 
-        status_panel = SectionPanel("System Status", status)
+        status_panel = SectionPanel("Estado General de la Aplicación", status)
         status_panel.setMinimumWidth(270)
 
         layout.addWidget(cards_scroll, stretch=4)
@@ -87,9 +87,9 @@ class LivePredictionsView(QWidget):
         entry_score = EntryScoreChart()
         entry_score.set_rows(MOCK_ENTRY_SCORE_MAP)
 
-        layout.addWidget(SectionPanel("Event Log", event_log), stretch=2)
-        layout.addWidget(SectionPanel("Execution Console", console), stretch=3)
-        layout.addWidget(SectionPanel("Signal Distribution", signal_distribution), stretch=1)
-        layout.addWidget(SectionPanel("Entry Score Map", entry_score), stretch=1)
+        layout.addWidget(SectionPanel("Log de Eventos", event_log), stretch=2)
+        layout.addWidget(SectionPanel("Consola de Ejecución", console), stretch=3)
+        layout.addWidget(SectionPanel("Distribución de Señales", signal_distribution), stretch=1)
+        layout.addWidget(SectionPanel("Mayores Repeticiones", entry_score), stretch=1)
 
         return layout

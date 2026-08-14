@@ -14,6 +14,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSlider,
     QSpinBox,
     QTabBar,
     QTextEdit,
@@ -28,6 +31,7 @@ from el_animal_fm.prediction.application.config.prediction_config import (
     XGB_MODEL_CONFIG,
 )
 from el_animal_fm.ui.views.news_enrichment_view import NewsEnrichmentView
+from el_animal_fm.ui.widgets.calendar_date_edit import CalendarDateEdit
 
 
 class ModelsView(QWidget):
@@ -43,16 +47,35 @@ class ModelsView(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("ModelsScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        surface = QWidget()
+        surface.setObjectName("ModelsScrollSurface")
+        surface.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        surface_layout = QVBoxLayout(surface)
+        surface_layout.setContentsMargins(0, 0, 4, 8)
+        surface_layout.setSpacing(10)
 
         upper = QHBoxLayout()
         upper.setSpacing(10)
         upper.addWidget(self._build_funds_panel(), stretch=3)
         upper.addWidget(self._build_configuration_panel(), stretch=5)
         upper.addWidget(self._build_optuna_panel(), stretch=4)
-        layout.addLayout(upper, stretch=7)
-        layout.addWidget(self._build_training_panel(), stretch=2)
-        layout.addWidget(self._build_console(), stretch=1)
+        upper_container = QWidget()
+        upper_container.setLayout(upper)
+        upper_container.setMinimumHeight(535)
+        surface_layout.addWidget(upper_container)
+        surface_layout.addWidget(self._build_training_panel())
+        surface_layout.addWidget(self._build_console())
+        surface_layout.addStretch(1)
+
+        scroll.setWidget(surface)
+        layout.addWidget(scroll)
 
         self._select_fund(self._selected_fund)
 
@@ -265,19 +288,16 @@ class ModelsView(QWidget):
 
     def _build_training_panel(self) -> QFrame:
         panel = self._panel()
+        panel.setObjectName("ModelTrainingPanel")
+        panel.setMinimumHeight(188)
         layout = panel.layout()
-
-        heading = QHBoxLayout()
-        heading.addWidget(self._title("ENTRENAMIENTO Y EVALUACION"))
-        heading.addStretch(1)
-        script = QLabel("CODE  09_xgboost_prediction.py")
-        script.setObjectName("NewsScriptLabel")
-        heading.addWidget(script)
-        layout.addLayout(heading)
+        layout.addWidget(self._title("ENTRENAMIENTO Y EVALUACION"))
 
         content = QHBoxLayout()
         content.setSpacing(12)
 
+        schedule = QVBoxLayout()
+        schedule.setSpacing(4)
         dates = QGridLayout()
         dates.setHorizontalSpacing(8)
         date_specs = (
@@ -286,10 +306,50 @@ class ModelsView(QWidget):
             ("INICIO PRUEBA", date(2026, 5, 31)),
             ("FIN PRUEBA", date(2026, 6, 9)),
         )
+        date_fields: list[QDateEdit] = []
         for column, (label, value) in enumerate(date_specs):
             dates.addWidget(self._field_label(label), 0, column)
-            dates.addWidget(self._date_field(value), 1, column)
-        content.addLayout(dates, stretch=5)
+            field = self._date_field(value)
+            dates.addWidget(field, 1, column)
+            date_fields.append(field)
+        schedule.addLayout(dates)
+
+        split_control = QFrame()
+        split_control.setObjectName("ModelTimeline")
+        split_layout = QVBoxLayout(split_control)
+        split_layout.setContentsMargins(8, 4, 8, 4)
+        split_layout.setSpacing(2)
+
+        self._data_split = QSlider(Qt.Orientation.Horizontal)
+        self._data_split.setObjectName("ModelDataSplit")
+        self._data_split.setRange(50, 95)
+        self._data_split.setValue(80)
+        self._data_split.setSingleStep(1)
+        self._data_split.setPageStep(5)
+        self._data_split.setToolTip("Porcentaje de datos destinado al entrenamiento")
+        split_layout.addWidget(self._data_split)
+
+        split_labels = QHBoxLayout()
+        self._training_split_label = QLabel()
+        self._training_split_label.setObjectName("ModelTimelineTrain")
+        self._evaluation_split_label = QLabel()
+        self._evaluation_split_label.setObjectName("ModelTimelineTest")
+        split_labels.addWidget(self._training_split_label)
+        split_labels.addStretch(1)
+        split_labels.addWidget(self._evaluation_split_label)
+        split_layout.addLayout(split_labels)
+        schedule.addWidget(split_control)
+
+        self._training_start, self._training_end, self._evaluation_start, self._evaluation_end = date_fields
+        self._data_split.valueChanged.connect(self._update_data_split)
+        self._training_start.dateChanged.connect(self._update_data_split)
+        self._evaluation_end.dateChanged.connect(self._update_data_split)
+        self._update_data_split()
+
+        script = QLabel("CODE  09_xgboost_prediction.py")
+        script.setObjectName("ModelScriptLabel")
+        schedule.addWidget(script)
+        content.addLayout(schedule, stretch=6)
 
         options = QGridLayout()
         options.setHorizontalSpacing(8)
@@ -301,30 +361,41 @@ class ModelsView(QWidget):
         options.addWidget(self._check("USAR PRESETS POR FONDO", checked=True), 2, 0)
         options.addWidget(self._check("USAR XGB_MODEL_CONFIG", checked=True), 2, 1)
         options.addWidget(self._check("SOLO PREDICCION LIVE"), 3, 0, 1, 2)
-        content.addLayout(options, stretch=3)
+        options_frame = QFrame()
+        options_frame.setObjectName("ModelTrainingOptions")
+        options_frame.setLayout(options)
+        content.addWidget(options_frame, stretch=3)
 
         actions = QVBoxLayout()
         actions.addWidget(self._button("▶  ENTRENAR MODELOS SELECCIONADOS", primary=True))
         actions.addWidget(self._button("EVALUAR MODELOS"))
         actions.addStretch(1)
         content.addLayout(actions, stretch=2)
-        layout.addLayout(content)
-
-        timeline = QFrame()
-        timeline.setObjectName("ModelTimeline")
-        timeline_layout = QHBoxLayout(timeline)
-        timeline_layout.setContentsMargins(8, 3, 8, 3)
-        train = QLabel("●━━━━━━━━━━━━━━━━━━━━  ENTRENAMIENTO")
-        train.setObjectName("ModelTimelineTrain")
-        test = QLabel("●━━━━━━  PRUEBA")
-        test.setObjectName("ModelTimelineTest")
-        timeline_layout.addWidget(train, stretch=4)
-        timeline_layout.addWidget(test, stretch=1)
-        layout.addWidget(timeline)
+        layout.addLayout(content, stretch=1)
         return panel
+
+    def _update_data_split(self) -> None:
+        """Apply the selected train/evaluation percentage to the full date range."""
+        training_percentage = self._data_split.value()
+        self._training_split_label.setText(f"ENTRENAMIENTO  {training_percentage}%")
+        self._evaluation_split_label.setText(f"EVALUACION  {100 - training_percentage}%")
+
+        start = self._training_start.date()
+        end = self._evaluation_end.date()
+        total_days = start.daysTo(end)
+        if total_days < 1:
+            return
+
+        training_days = max(1, round((total_days + 1) * training_percentage / 100))
+        split_date = start.addDays(min(training_days - 1, total_days - 1))
+        evaluation_start = split_date.addDays(1)
+        self._training_end.setDate(split_date)
+        self._evaluation_start.setDate(evaluation_start)
 
     def _build_console(self) -> QFrame:
         panel = self._panel()
+        panel.setObjectName("ModelConsolePanel")
+        panel.setMinimumHeight(230)
         layout = panel.layout()
 
         toolbar = QHBoxLayout()
@@ -468,7 +539,7 @@ class ModelsView(QWidget):
 
     @staticmethod
     def _date_field(value: date) -> QDateEdit:
-        field = QDateEdit(QDate(value.year, value.month, value.day))
+        field = CalendarDateEdit(QDate(value.year, value.month, value.day))
         field.setObjectName("NewsInput")
         field.setCalendarPopup(True)
         field.setDisplayFormat("yyyy-MM-dd")

@@ -108,13 +108,13 @@ MOCK_FUND_SIGNALS: tuple[MockFundSignal, ...] = (
 
 
 MOCK_SYSTEM_STATUS: dict[str, str] = {
-    "Model loaded": "OK",
-    "BioBio sources": "427",
-    "Mostrador sources": "283",
-    "Feature sets": "574 / 574",
-    "Funds analyzed": "6",
-    "Live signals": "5",
-    "Warnings": "1",
+    "Modelos Cargados": "OK",
+    "Páginas Bio Bio": "427",
+    "Páginas Mostrador": "283",
+    "Total Parámetros": "574 / 574",
+    "Fondos Analizados": "6",
+    "Señales en VIVO": "5",
+    "Advertencias": "1",
 }
 
 
