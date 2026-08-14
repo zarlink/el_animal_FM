@@ -73,6 +73,7 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 pytz==2026.2
 PyYAML==6.0.3
+PySide6==6.11.1
 regex==2026.5.9
 requests==2.34.2
 rich==15.0.0
