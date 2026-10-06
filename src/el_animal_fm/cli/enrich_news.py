@@ -44,7 +44,7 @@ def build_allowed_dates(args: argparse.Namespace) -> set | None:
     return None
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Enriquece noticias descargadas con features derivados de diccionarios."
     )
@@ -64,7 +64,14 @@ def main() -> None:
     parser.add_argument("--days-back", type=int, default=None, help="Cantidad de días hacia atrás incluyendo fecha final.")
     parser.add_argument("--date-from", default=None, help="Fecha inicial opcional.")
     parser.add_argument("--date-to", default=None, help="Fecha final opcional.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.workers < 1:
+        parser.error("--workers debe ser mayor o igual a 1.")
+    for name in (args.input_name, args.output_name):
+        if not name.strip() or Path(name).name != name or name in {".", ".."}:
+            parser.error("Los archivos de entrada y salida deben ser nombres sin directorios.")
+    if args.input_name == args.output_name:
+        parser.error("El archivo enriquecido debe ser distinto del archivo de entrada.")
 
     base_dir = Path(args.base_dir).resolve()
     dictionary_dir = (base_dir / args.dictionary_dir).resolve()
@@ -95,6 +102,8 @@ def main() -> None:
         print(f"  {path}")
     if len(files) > 10:
         print(f"  ... y {len(files) - 10} más")
+    if not files:
+        print("[WARN] No hay archivos para enriquecer con las opciones seleccionadas.")
 
     summaries = enrich_files_parallel(
         files,
@@ -123,7 +132,8 @@ def main() -> None:
     print(f"Errores: {errors}")
     print(f"Resumen guardado en: {summary_path}")
     print("=" * 70)
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

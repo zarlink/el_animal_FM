@@ -31,25 +31,26 @@ def ensure_backup(path: Path) -> None:
         shutil.copy2(path, backup_path)
 
 
-def build_output_path(path: Path, *, overwrite: bool) -> Path:
+def build_output_path(path: Path, *, overwrite: bool, output_name: str | None = None) -> Path:
     if overwrite:
         return path
 
-    return path.with_name(path.stem + "_normalizado" + path.suffix)
+    output_path = path.with_name(output_name or path.stem + "_normalizado" + path.suffix)
+    if output_path == path:
+        raise ValueError("El archivo alternativo debe ser distinto del original.")
+    return output_path
 
 
-def process_file(path: Path, overwrite: bool = True) -> bool:
+def process_file(path: Path, overwrite: bool = True, *, output_name: str | None = None) -> bool:
     try:
         payload = read_payload(path)
+        ensure_backup(path)
+        normalized = normalize_payload(payload)
+        output_path = build_output_path(path, overwrite=overwrite, output_name=output_name)
+        write_payload(output_path, normalized)
     except Exception as exc:
-        print(f"[ERROR] No pude leer JSON: {path} | {exc}")
+        print(f"[ERROR] No pude normalizar: {path} | {exc}")
         return False
-
-    ensure_backup(path)
-
-    normalized = normalize_payload(payload)
-    output_path = build_output_path(path, overwrite=overwrite)
-    write_payload(output_path, normalized)
 
     print(f"[OK] Reparado: {output_path}")
     return True

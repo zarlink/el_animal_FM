@@ -12,4 +12,4 @@ from el_animal_fm.cli.enrich_news import main
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
