@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 
 from PySide6.QtCore import QPointF, QSize, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
@@ -85,7 +86,7 @@ def _semaforo_style(semaforo: str) -> dict[str, object]:
 
 
 class FundSignalCard(QFrame):
-    def __init__(self, index: str, title: str) -> None:
+    def __init__(self, index: str, title: str, *, configuration: Mapping[str, object] | None = None) -> None:
         super().__init__()
         self.setObjectName("FundSignalCard")
         self.setMinimumHeight(205)
@@ -104,6 +105,23 @@ class FundSignalCard(QFrame):
         layout.setSpacing(10)
 
         layout.addLayout(self._build_header(index, title))
+        if configuration is not None:
+            config_grid = QGridLayout()
+            rows = (
+                ("RUN", str(configuration["run_fm"])),
+                ("Carpeta", str(configuration["folder"])),
+                ("Series preferidas", ", ".join(configuration["preferred_series"])),
+                ("Horizonte configurado", f'{configuration["horizon_business_days"]} día(s) hábil(es)'),
+            )
+            for row, (name, value) in enumerate(rows):
+                label = QLabel(name)
+                label.setObjectName("MetricName")
+                config_value = QLabel(value)
+                config_value.setObjectName("MetricValue")
+                config_value.setWordWrap(True)
+                config_grid.addWidget(label, row, 0)
+                config_grid.addWidget(config_value, row, 1)
+            layout.addLayout(config_grid)
         layout.addLayout(self._build_body())
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
@@ -167,6 +185,7 @@ class FundSignalCard(QFrame):
 
         title_label = QLabel(title.upper())
         title_label.setObjectName("CardTitle")
+        title_label.setWordWrap(True)
 
         layout.addWidget(index_label)
         layout.addWidget(title_label, stretch=1)
@@ -180,20 +199,37 @@ class FundSignalCard(QFrame):
         metric_grid.setHorizontalSpacing(14)
         metric_grid.setVerticalSpacing(7)
 
-        metrics = (
-            "pred_prob_up",
-            "pred_up",
-            "momentum_10",
-            "vs_ma20",
-            "drawdown_20",
-            "entry_score",
-        )
+        metric_tooltips = {
+            "pred_prob_up": (
+                "Probabilidad estimada por el modelo de que el valor del fondo suba"
+            ),
+            "pred_up": (
+                "Prediccion Binaria: 1 que el modelo espera una subida, 0 que no"
+            ),
+            "momentum_10": (
+                "Variacion acumulada del valor del fondo durante los últimos 10 días."
+            ),
+            "vs_ma20": (
+                "Diferencia porcentual entre el valor actual del fondo y su promedio"
+            ),
+            "drawdown_20": (
+                "Caída porcentual del valor actual respecto del máximo alcanzado durante los "
+                "últimos 20 días."
+            ),
+            "entry_score": (
+                "Puntaje que resume las condiciones utilizadas para evaluar una posible entrada al fondo."
+            )
 
-        for row, metric in enumerate(metrics):
+        }
+
+        for row, (metric,tooltip) in enumerate(metric_tooltips.items()):
             name = QLabel(metric)
             name.setObjectName("MetricName")
+            name.setToolTip(tooltip)
+
             value = QLabel("--")
             value.setObjectName("MetricValue")
+            value.setToolTip(tooltip)
             value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self._metric_values[metric] = value
             metric_grid.addWidget(name, row, 0)

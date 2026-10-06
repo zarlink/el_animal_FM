@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
-from el_animal_fm.ui.dev.mock_dashboard_data import (
-    MOCK_CONSOLE_LINES,
-    MOCK_ENTRY_SCORE_MAP,
-    MOCK_EVENT_LOG,
-    MOCK_FUND_SIGNALS,
-    MOCK_SIGNAL_DISTRIBUTION,
-    MOCK_SYSTEM_STATUS,
+from el_animal_fm.news.application.enrichment.enrichment_config import (
+    DEFAULT_DICTIONARY_VERSION,
+    DEFAULT_SOURCES,
+    FAMILIES,
+)
+from el_animal_fm.prediction.application.config.prediction_config import (
+    FUND_CONFIG,
+    FUND_MODEL_CONFIG,
+    XGB_MODEL_CONFIG,
 )
 from el_animal_fm.ui.widgets.entry_score_chart import EntryScoreChart
 from el_animal_fm.ui.widgets.event_log_panel import EventLogPanel
@@ -43,15 +45,23 @@ class LivePredictionsView(QWidget):
         cards.setHorizontalSpacing(10)
         cards.setVerticalSpacing(10)
 
-        for position, signal in enumerate(MOCK_FUND_SIGNALS):
-            card = FundSignalCard(signal.index, signal.title)
+        for position, (fund_key, configuration) in enumerate(FUND_CONFIG.items()):
+            card = FundSignalCard(
+                f"{position + 1:02d}", configuration["label"], configuration=configuration,
+            )
+            card.setProperty("fund_key", fund_key)
             card.set_signal(
-                metrics=signal.metrics,
-                semaforo=signal.semaforo,
-                decision_if_out=signal.decision_if_out,
-                decision_if_in=signal.decision_if_in,
+                metrics={},
+                semaforo="SIN SENAL",
+                decision_if_out="Pendiente de predicción",
+                decision_if_in="Pendiente de predicción",
             )
             cards.addWidget(card, position // 2, position % 2)
+
+        if not FUND_CONFIG:
+            empty = QLabel("No hay fondos configurados.")
+            empty.setObjectName("MetricName")
+            cards.addWidget(empty, 0, 0, 1, 2)
 
         cards_scroll = QScrollArea()
         cards_scroll.setObjectName("FundCardsScroll")
@@ -61,8 +71,23 @@ class LivePredictionsView(QWidget):
         cards_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         cards_scroll.setWidget(cards_surface)
 
-        status = SystemStatusPanel()
-        status.set_status(MOCK_SYSTEM_STATUS)
+        fund_count = len(FUND_CONFIG)
+        decision_count = sum(key in FUND_MODEL_CONFIG for key in FUND_CONFIG)
+        xgb_count = sum(key in XGB_MODEL_CONFIG for key in FUND_CONFIG)
+        status_values = {
+            "Fondos Configurados": str(fund_count),
+            "Fondos con Configuración de Decisión": f"{decision_count} de {fund_count}",
+            "Fondos con Configuración XGBoost": f"{xgb_count} de {fund_count}",
+            "Fuentes de Noticias Configuradas": str(len(DEFAULT_SOURCES)),
+            "Familias de Enriquecimiento": str(len(FAMILIES)),
+            "Versión del Diccionario Configurada": DEFAULT_DICTIONARY_VERSION,
+            "Modelos Cargados": "Pendiente",
+            "Fondos Analizados": "Pendiente",
+            "Señales en VIVO": "Pendiente",
+        }
+        status = SystemStatusPanel(rows=tuple(status_values))
+        status.set_status(status_values)
+        status.setToolTip("Fuentes de noticias configuradas: " + ", ".join(DEFAULT_SOURCES))
 
         status_panel = SectionPanel("Estado General de la Aplicación", status)
         status_panel.setMinimumWidth(270)
@@ -76,16 +101,16 @@ class LivePredictionsView(QWidget):
         layout.setSpacing(10)
 
         event_log = EventLogPanel()
-        event_log.set_events(MOCK_EVENT_LOG)
+        event_log.set_events((f"Configuración cargada: {len(FUND_CONFIG)} fondo(s).",))
 
         console = ExecutionConsole()
-        console.set_lines(MOCK_CONSOLE_LINES)
+        console.set_lines(("Pendiente de ejecución de predicción.",))
 
         signal_distribution = SignalDistributionChart()
-        signal_distribution.set_rows(MOCK_SIGNAL_DISTRIBUTION)
+        signal_distribution.set_rows(())
 
         entry_score = EntryScoreChart()
-        entry_score.set_rows(MOCK_ENTRY_SCORE_MAP)
+        entry_score.set_rows(())
 
         layout.addWidget(SectionPanel("Log de Eventos", event_log), stretch=2)
         layout.addWidget(SectionPanel("Consola de Ejecución", console), stretch=3)
