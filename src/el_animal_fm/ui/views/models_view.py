@@ -542,5 +542,5 @@ class ModelsView(QWidget):
         field = CalendarDateEdit(QDate(value.year, value.month, value.day))
         field.setObjectName("NewsInput")
         field.setCalendarPopup(True)
-        field.setDisplayFormat("yyyy-MM-dd")
+        field.setDisplayFormat("dd-MM-yyyy")
         return field

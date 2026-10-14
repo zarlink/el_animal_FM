@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import csv
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import requests
@@ -10,6 +11,33 @@ import requests
 from el_animal_fm.funds.application.cmf.cmf_dates import safe_date_for_filename
 from el_animal_fm.funds.application.cmf.cmf_text import slugify
 from el_animal_fm.funds.domain.models import FundOption
+
+
+def latest_downloaded_date(download_dir: Path) -> date | None:
+    """Read actual report dates, independent of filenames and modification times."""
+    latest = None
+    for path in download_dir.rglob("*.txt"):
+        try:
+            for encoding in ("utf-8-sig", "latin-1"):
+                try:
+                    with path.open(encoding=encoding, newline="") as stream:
+                        reader = csv.DictReader(stream, delimiter=";")
+                        if not reader.fieldnames or "FECHA_INF" not in reader.fieldnames:
+                            break
+                        for row in reader:
+                            value = (row.get("FECHA_INF") or "").strip()
+                            try:
+                                day = datetime.strptime(value, "%Y%m%d").date()
+                            except ValueError:
+                                continue
+                            if latest is None or day > latest:
+                                latest = day
+                    break
+                except UnicodeDecodeError:
+                    continue
+        except (OSError, csv.Error):
+            continue
+    return latest
 
 
 def fund_download_dir(download_dir: Path, fund: FundOption) -> Path:

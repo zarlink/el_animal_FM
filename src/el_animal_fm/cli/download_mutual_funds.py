@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from datetime import date
@@ -32,6 +33,7 @@ def main() -> None:
     parser.add_argument("--end-date", default=None, help="Fecha final, más reciente. Si se omite, usa hoy.")
     parser.add_argument("--max-days-per-request", type=int, default=MAX_DAYS_PER_REQUEST)
     parser.add_argument("--diagnostics", action="store_true")
+    parser.add_argument("--gui", action="store_true", help="Solicita CAPTCHA mediante eventos para la interfaz gráfica.")
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--sleep-between-ranges", type=float, default=1.0)
     parser.add_argument("--base-dir", default=".", help="Directorio base para downloads, captcha y debug.")
@@ -103,7 +105,7 @@ def main() -> None:
     print()
     print(f"Total solicitudes con CAPTCHA: {total_requests}")
 
-    confirm = input("\n¿Continuar con la descarga secuencial? [s/N]: ").strip().lower()
+    confirm = "s" if args.gui else input("\n¿Continuar con la descarga secuencial? [s/N]: ").strip().lower()
     if confirm not in {"s", "si", "sí", "y", "yes"}:
         print("Proceso cancelado por el usuario.")
         sys.exit(0)
@@ -112,6 +114,10 @@ def main() -> None:
 
     summaries: list[dict[str, str]] = []
     current_request = 0
+
+    def gui_captcha(path: Path) -> str:
+        print("[CMF_CAPTCHA] " + json.dumps({"path": str(path)}), flush=True)
+        return input()
 
     for fund in funds:
         print()
@@ -135,10 +141,13 @@ def main() -> None:
                 download_dir=download_dir,
                 captcha_path=captcha_path,
                 debug_dir=debug_dir,
+                captcha_provider=gui_captcha if args.gui else None,
             )
             summaries.append(result)
 
             if result.get("status") == "html_response_error":
+                if args.gui:
+                    continue
                 print()
                 decision = input("Hubo error en este tramo. ¿Continuar con el siguiente? [s/N]: ").strip().lower()
                 if decision not in {"s", "si", "sí", "y", "yes"}:
@@ -165,6 +174,8 @@ def main() -> None:
     print(f"Tramos con error: {errors}")
     print(f"Resumen guardado en: {summary_path}")
     print("=" * 72)
+    if errors:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

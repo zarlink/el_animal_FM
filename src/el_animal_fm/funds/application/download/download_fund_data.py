@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Callable
 
 from el_animal_fm.funds.application.cmf.cmf_config import DOWNLOAD_URL
 from el_animal_fm.funds.application.cmf.cmf_dates import format_cmf_date, safe_date_for_filename
@@ -38,6 +39,7 @@ def download_one_range(
     download_dir: Path,
     captcha_path: Path,
     debug_dir: Path,
+    captcha_provider: Callable[[Path], str] | None = None,
 ) -> dict[str, str]:
     start_str = format_cmf_date(start_date)
     end_str = format_cmf_date(end_date)
@@ -68,18 +70,20 @@ def download_one_range(
     captcha_url = find_captcha_image_url(soup, form)
 
     print(f"URL CAPTCHA detectada: {captcha_url}")
-    download_captcha(session, captcha_url, captcha_path)
-    show_captcha(captcha_path)
-
-    captcha_value = input("\nIngrese el CAPTCHA visto en la imagen para este tramo: ").strip()
-
-    if not captcha_value:
-        print("No ingresaste CAPTCHA. Proceso cancelado.")
-        sys.exit(1)
-
-    if not validate_captcha(session, captcha_value):
-        print("El CAPTCHA fue rechazado por la CMF. Proceso cancelado.")
-        sys.exit(1)
+    for attempt in range(3):
+        download_captcha(session, captcha_url, captcha_path)
+        if captcha_provider is None:
+            show_captcha(captcha_path)
+            captcha_value = input("\nIngrese el CAPTCHA visto en la imagen para este tramo: ").strip()
+        else:
+            captcha_value = captcha_provider(captcha_path).strip()
+        if not captcha_value:
+            raise ValueError("No ingresaste CAPTCHA. Proceso cancelado.")
+        if validate_captcha(session, captcha_value):
+            break
+        print("El CAPTCHA fue rechazado. Se solicitará una nueva imagen.", flush=True)
+    else:
+        raise ValueError("El CAPTCHA fue rechazado tres veces.")
 
     payload = collect_payload(form)
     payload = infer_and_fill_fields(form, payload, start_str, end_str, captcha_value, fund)

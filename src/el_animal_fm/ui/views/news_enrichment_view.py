@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+import codecs
+import json
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QProcess, QTimer, Qt
+from PySide6.QtGui import QPixmap, QTextCursor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDateEdit,
@@ -19,7 +25,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from el_animal_fm.news.application.enrichment.enrichment_config import (
+    DEFAULT_DICTIONARY_VERSION, DEFAULT_INPUT_NAME, DEFAULT_OUTPUT_NAME,
+)
+from el_animal_fm.news.infrastructure.dates import today_chile
+from el_animal_fm.funds.infrastructure.cmf_storage import latest_downloaded_date
 from el_animal_fm.ui.widgets.calendar_date_edit import CalendarDateEdit
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 
 class NewsEnrichmentView(QWidget):
@@ -27,6 +41,11 @@ class NewsEnrichmentView(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self._process = QProcess(self)
+        self._active_step: str | None = None
+        self._stopping = False
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._output_buffer = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -40,6 +59,17 @@ class NewsEnrichmentView(QWidget):
 
         layout.addLayout(workflow, stretch=3)
         layout.addWidget(self._build_console(), stretch=2)
+        self._process.setWorkingDirectory(str(PROJECT_ROOT))
+        self._process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        self._process.readyReadStandardOutput.connect(self._read_process_output)
+        self._process.finished.connect(self._process_finished)
+        self._process.errorOccurred.connect(self._process_error)
+        self._kill_timer = QTimer(self)
+        self._kill_timer.setSingleShot(True)
+        self._kill_timer.timeout.connect(self._process.kill)
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._shutdown)
 
     def _build_normalization_panel(self) -> QFrame:
         panel, body = self._build_panel("01", "NORMALIZAR NOTICIAS")
@@ -47,31 +77,46 @@ class NewsEnrichmentView(QWidget):
         body.addWidget(self._field_label("FUENTES"))
         source_row = QHBoxLayout()
         source_row.setSpacing(12)
-        source_row.addWidget(self._checkbox("BIO BIO CHILE", checked=True))
-        source_row.addWidget(self._checkbox("EL MOSTRADOR", checked=True))
+        self._normal_biobio = self._checkbox("BIO BIO CHILE", checked=True)
+        self._normal_mostrador = self._checkbox("EL MOSTRADOR", checked=True)
+        source_row.addWidget(self._normal_biobio)
+        source_row.addWidget(self._normal_mostrador)
         source_row.addStretch(1)
         body.addLayout(source_row)
 
         body.addWidget(self._field_label("ARCHIVO DE ENTRADA"))
-        body.addWidget(self._line_edit("noticias_dia.txt"))
+        self._normal_input = self._line_edit(DEFAULT_INPUT_NAME)
+        body.addWidget(self._normal_input)
+        body.addWidget(self._field_label("TODOS LOS DIAS DESCARGADOS"))
 
-        overwrite = self._checkbox("SOBRESCRIBIR ORIGINAL", checked=True)
+        self._normal_overwrite = overwrite = self._checkbox("SOBRESCRIBIR ORIGINAL", checked=True)
         body.addWidget(overwrite)
 
         body.addWidget(self._field_label("ARCHIVO DE SALIDA (ALTERNATIVO)"))
-        body.addWidget(self._line_edit("noticias_dia_normalizado.txt"))
+        self._normal_output = self._line_edit("noticias_dia_normalizado.txt")
+        self._normal_output.setEnabled(False)
+        overwrite.toggled.connect(lambda checked: self._normal_output.setEnabled(not checked))
+        body.addWidget(self._normal_output)
 
         body.addWidget(self._separator())
-        body.addWidget(self._field_label("ESTADO"))
+        body.addWidget(self._field_label("ESTADO (ARCHIVOS DIARIOS)"))
         stats = QGridLayout()
         stats.setSpacing(6)
-        for column, (label, value) in enumerate(
-            (("TOTAL", "1.195"), ("PROCESADAS", "1.195"), ("NORMALIZADAS", "1.195"), ("ERRORES", "0"))
-        ):
-            stats.addWidget(self._stat(label, value, error=label == "ERRORES"), 0, column)
+        self._normal_stats: dict[str, QLabel] = {}
+        for column, (key, label) in enumerate((
+            ("total", "TOTAL"), ("processed", "PROCESADOS"),
+            ("normalized", "NORMALIZADOS"), ("errors", "ERRORES"),
+        )):
+            stat = self._stat(label, "--", error=key == "errors")
+            self._normal_stats[key] = stat.findChild(QLabel, "NewsStatValue")
+            stats.addWidget(stat, 0, column)
+        self._normal_status = self._field_label("PENDIENTE")
+        body.addWidget(self._normal_status)
         body.addLayout(stats)
         body.addStretch(1)
-        body.addWidget(self._primary_button("▶  EJECUTAR NORMALIZACION"))
+        self._normal_button = self._primary_button("▶  EJECUTAR NORMALIZACION")
+        self._normal_button.clicked.connect(self._run_normalization)
+        body.addWidget(self._normal_button)
         body.addWidget(self._script_label("03_normalizador_noticias.py"))
         return panel
 
@@ -81,23 +126,25 @@ class NewsEnrichmentView(QWidget):
         dates = QGridLayout()
         dates.setHorizontalSpacing(10)
         dates.setVerticalSpacing(5)
-        end_date = date.today()
+        end_date = today_chile()
         dates.addWidget(self._field_label("DESDE"), 0, 0)
         dates.addWidget(self._field_label("HASTA"), 0, 1)
-        dates.addWidget(self._date_edit(end_date - timedelta(days=2)), 1, 0)
-        dates.addWidget(self._date_edit(end_date), 1, 1)
+        self._date_from = self._date_edit(end_date - timedelta(days=2))
+        self._date_to = self._date_edit(end_date)
+        dates.addWidget(self._date_from, 1, 0)
+        dates.addWidget(self._date_to, 1, 1)
         body.addLayout(dates)
 
         options = QGridLayout()
         options.setHorizontalSpacing(10)
         options.setVerticalSpacing(6)
         options.addWidget(self._field_label("FUENTE"), 0, 0)
-        source = QComboBox()
+        self._sources = source = QComboBox()
         source.setObjectName("NewsInput")
         source.addItems(("AMBAS FUENTES", "BIO BIO CHILE", "EL MOSTRADOR"))
         options.addWidget(source, 1, 0)
         options.addWidget(self._field_label("WORKERS"), 0, 1)
-        workers = QSpinBox()
+        self._workers = workers = QSpinBox()
         workers.setObjectName("NewsInput")
         workers.setRange(1, 32)
         workers.setValue(4)
@@ -105,11 +152,14 @@ class NewsEnrichmentView(QWidget):
         body.addLayout(options)
 
         body.addWidget(self._field_label("VERSION DE DICCIONARIO"))
-        body.addWidget(self._line_edit("v2026-06-25"))
+        self._dictionary_version = self._line_edit(DEFAULT_DICTIONARY_VERSION)
+        body.addWidget(self._dictionary_version)
 
         toggle_row = QHBoxLayout()
-        toggle_row.addWidget(self._checkbox("USAR CANDIDATOS", checked=True))
-        toggle_row.addWidget(self._checkbox("SOBRESCRIBIR"))
+        self._use_candidates = self._checkbox("USAR CANDIDATOS", checked=True)
+        self._enrich_overwrite = self._checkbox("SOBRESCRIBIR")
+        toggle_row.addWidget(self._use_candidates)
+        toggle_row.addWidget(self._enrich_overwrite)
         body.addLayout(toggle_row)
 
         files = QGridLayout()
@@ -117,14 +167,71 @@ class NewsEnrichmentView(QWidget):
         files.setVerticalSpacing(5)
         files.addWidget(self._field_label("ARCHIVO DE ENTRADA"), 0, 0)
         files.addWidget(self._field_label("ARCHIVO DE SALIDA"), 0, 1)
-        files.addWidget(self._line_edit("noticias_dia.txt"), 1, 0)
-        files.addWidget(self._line_edit("noticias_dia_enriquecidas.txt"), 1, 1)
+        self._enrich_input = self._line_edit(DEFAULT_INPUT_NAME)
+        self._enrich_output = self._line_edit(DEFAULT_OUTPUT_NAME)
+        files.addWidget(self._enrich_input, 1, 0)
+        files.addWidget(self._enrich_output, 1, 1)
         body.addLayout(files)
 
+        body.addWidget(self._field_label("ULTIMO DIA ENRIQUECIDO POR FUENTE"))
+        self._latest_enriched = QLabel()
+        self._latest_enriched.setObjectName("NewsFieldLabel")
+        self._latest_enriched.setWordWrap(True)
+        self._latest_enriched.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        body.addWidget(self._latest_enriched)
+        self._enrich_output.textChanged.connect(self._refresh_latest_enriched)
+        self._sources.currentIndexChanged.connect(self._refresh_latest_enriched)
+        self._refresh_latest_enriched()
+
         body.addStretch(1)
-        body.addWidget(self._primary_button("▶  EJECUTAR ENRIQUECIMIENTO"))
+        self._enrich_status = self._field_label("PENDIENTE")
+        body.addWidget(self._enrich_status)
+        self._enrich_button = self._primary_button("▶  EJECUTAR ENRIQUECIMIENTO")
+        self._enrich_button.clicked.connect(self._run_enrichment)
+        body.addWidget(self._enrich_button)
         body.addWidget(self._script_label("06_enriquecer_noticias.py"))
         return panel
+
+    def _refresh_latest_enriched(self) -> None:
+        output_name = self._enrich_output.text().strip()
+        selected = self._sources.currentIndex()
+        lines = []
+        paths = []
+        for index, (source, title) in enumerate((("biobio", "BioBio"), ("mostrador", "El Mostrador")), 1):
+            if selected not in (0, index):
+                continue
+            candidates = []
+            source_dir = PROJECT_ROOT / source
+            if output_name and Path(output_name).name == output_name and source_dir.is_dir():
+                for day_dir in source_dir.iterdir():
+                    try:
+                        day = datetime.strptime(day_dir.name, "%d_%m_%Y").date()
+                    except ValueError:
+                        continue
+                    output = day_dir / output_name
+                    if output.is_file():
+                        candidates.append((day, output))
+            latest = None
+            for day, output in sorted(candidates, reverse=True):
+                try:
+                    payload = json.loads(output.read_text(encoding="utf-8"))
+                    if (isinstance(payload, dict)
+                            and isinstance(payload.get("metadata"), dict)
+                            and payload["metadata"].get("features_enriched") is True
+                            and isinstance(payload.get("articles"), list)):
+                        latest = day
+                        paths.append(str(output))
+                        break
+                except (OSError, ValueError):
+                    continue
+            lines.append(f"{title}: {latest.strftime('%d-%m-%Y') if latest else 'Sin archivos enriquecidos'}")
+        self._latest_enriched.setText("\n".join(lines))
+        self._latest_enriched.setToolTip("\n".join(paths))
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._refresh_latest_enriched()
+        self._refresh_latest_cmf()
 
     def _build_cmf_panel(self) -> QFrame:
         panel, body = self._build_panel("03", "DESCARGAR VALORES CMF")
@@ -134,8 +241,12 @@ class NewsEnrichmentView(QWidget):
         funds.setHorizontalSpacing(10)
         funds.setVerticalSpacing(5)
         labels = ("CARTERA BALANCEADO", "NATIONAL EQUITY", "TOESCA EQUITY", "AHORRO UF ITAU")
+        self._cmf_funds = {}
+        keys = ("balanceado", "national_equity", "toesca_equity", "itau_ahorro_uf")
         for index, label in enumerate(labels):
-            funds.addWidget(self._checkbox(label, checked=True), index // 2, index % 2)
+            checkbox = self._checkbox(label, checked=True)
+            self._cmf_funds[keys[index]] = checkbox
+            funds.addWidget(checkbox, index // 2, index % 2)
         body.addLayout(funds)
 
         dates = QGridLayout()
@@ -144,8 +255,10 @@ class NewsEnrichmentView(QWidget):
         today = date.today()
         dates.addWidget(self._field_label("FECHA INICIAL"), 0, 0)
         dates.addWidget(self._field_label("FECHA FINAL"), 0, 1)
-        dates.addWidget(self._date_edit(today - timedelta(days=30)), 1, 0)
-        dates.addWidget(self._date_edit(today), 1, 1)
+        self._cmf_from = self._date_edit(today - timedelta(days=30))
+        self._cmf_to = self._date_edit(today)
+        dates.addWidget(self._cmf_from, 1, 0)
+        dates.addWidget(self._cmf_to, 1, 1)
         body.addLayout(dates)
 
         request_options = QGridLayout()
@@ -155,26 +268,81 @@ class NewsEnrichmentView(QWidget):
         max_days.setObjectName("NewsInput")
         max_days.setRange(1, 31)
         max_days.setValue(31)
+        self._cmf_max_days = max_days
         request_options.addWidget(max_days, 1, 0)
-        request_options.addWidget(self._checkbox("OMITIR EXISTENTES"), 1, 1)
+        self._cmf_skip = self._checkbox("OMITIR EXISTENTES")
+        request_options.addWidget(self._cmf_skip, 1, 1)
         body.addLayout(request_options)
 
         body.addWidget(self._separator())
         body.addWidget(self._field_label("CAPTCHA"))
         captcha_row = QHBoxLayout()
-        captcha = QLabel("A 7 K 2")
+        self._cmf_image = captcha = QLabel("Sin CAPTCHA pendiente")
         captcha.setObjectName("NewsCaptcha")
         captcha.setAlignment(Qt.AlignmentFlag.AlignCenter)
         captcha_row.addWidget(captcha, stretch=1)
-        captcha_status = QLabel("ESTADO: LISTO\nRENOVACION AUTO: 02:47")
+        self._cmf_status = captcha_status = QLabel("PENDIENTE")
         captcha_status.setObjectName("NewsSuccess")
         captcha_row.addWidget(captcha_status, stretch=2)
         body.addLayout(captcha_row)
+        self._cmf_latest = self._field_label("")
+        self._cmf_latest.setWordWrap(True)
+        self._cmf_latest.setToolTip("Fecha más reciente del campo FECHA_INF entre todos los fondos descargados.")
+        body.addWidget(self._cmf_latest)
+        self._refresh_latest_cmf()
+        self._cmf_code = self._line_edit("")
+        self._cmf_code.setPlaceholderText("Escribe el código de la imagen")
+        self._cmf_code.setEnabled(False)
+        self._cmf_code.returnPressed.connect(self._send_cmf_captcha)
+        body.addWidget(self._cmf_code)
+        self._cmf_send = self._secondary_button("ENVIAR CAPTCHA")
+        self._cmf_send.setEnabled(False)
+        self._cmf_send.clicked.connect(self._send_cmf_captcha)
+        body.addWidget(self._cmf_send)
 
         body.addStretch(1)
-        body.addWidget(self._primary_button("▶  INICIAR DESCARGA CMF"))
+        self._cmf_button = self._primary_button("▶  INICIAR DESCARGA CMF")
+        self._cmf_button.clicked.connect(self._run_cmf)
+        body.addWidget(self._cmf_button)
         body.addWidget(self._script_label("08_descarga_fondos_mutuos.py"))
         return panel
+
+    def _refresh_latest_cmf(self) -> None:
+        latest = latest_downloaded_date(PROJECT_ROOT / "downloads")
+        value = latest.strftime("%d-%m-%Y") if latest else "Sin datos descargados"
+        self._cmf_latest.setText(f"ÚLTIMO DÍA CMF DESCARGADO: {value}")
+
+    def _cmf_arguments(self) -> list[str]:
+        funds = [key for key, checkbox in self._cmf_funds.items() if checkbox.isChecked()]
+        if not funds:
+            raise ValueError("Selecciona al menos un fondo CMF.")
+        if self._cmf_from.date() > self._cmf_to.date():
+            raise ValueError("La fecha inicial CMF no puede ser posterior a la final.")
+        args = ["--gui", "--base-dir", str(PROJECT_ROOT), "--fund", *funds,
+                "--start-date", self._cmf_from.date().toString("yyyy-MM-dd"),
+                "--end-date", self._cmf_to.date().toString("yyyy-MM-dd"),
+                "--max-days-per-request", str(self._cmf_max_days.value())]
+        if self._cmf_skip.isChecked():
+            args.append("--skip-existing")
+        return args
+
+    def _run_cmf(self) -> None:
+        try:
+            args = self._cmf_arguments()
+        except ValueError as exc:
+            self._append_console(f"[WARN] {exc}\n")
+            return
+        self._start_process("CMF", PROJECT_ROOT / "08_descarga_fondos_mutuos.py", args)
+
+    def _send_cmf_captcha(self) -> None:
+        code = self._cmf_code.text().strip()
+        if not code or not self._cmf_send.isEnabled() or self._active_step != "CMF":
+            return
+        self._process.write((code + "\n").encode("utf-8"))
+        self._cmf_code.clear()
+        self._cmf_code.setEnabled(False)
+        self._cmf_send.setEnabled(False)
+        self._cmf_status.setText("VALIDANDO CAPTCHA")
 
     def _build_console(self) -> QFrame:
         panel = QFrame()
@@ -189,20 +357,217 @@ class NewsEnrichmentView(QWidget):
         toolbar.addWidget(title)
         toolbar.addStretch(1)
 
-        stop = self._secondary_button("DETENER")
+        self._stop = stop = self._secondary_button("DETENER")
+        stop.setEnabled(False)
+        stop.clicked.connect(self._stop_process)
         clear = self._secondary_button("LIMPIAR CONSOLA")
         toolbar.addWidget(stop)
         toolbar.addWidget(clear)
         layout.addLayout(toolbar)
 
-        console = QTextEdit()
+        self._console = console = QTextEdit()
         console.setObjectName("NewsConsole")
         console.setReadOnly(True)
         console.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
-        console.setPlainText(_CONSOLE_TEXT)
+        console.setPlainText("[INFO] Listo para normalizar o enriquecer noticias.")
+        console.document().setMaximumBlockCount(10_000)
         clear.clicked.connect(console.clear)
         layout.addWidget(console, stretch=1)
         return panel
+
+    @staticmethod
+    def _file_name(field: QLineEdit) -> str:
+        name = field.text().strip()
+        if not name or Path(name).name != name or name in {".", ".."}:
+            raise ValueError("Indica nombres de archivo sin directorios para la entrada y salida.")
+        return name
+
+    def _normalization_arguments(self) -> list[str]:
+        sources = [source for source, control in (
+            ("biobio", self._normal_biobio), ("mostrador", self._normal_mostrador),
+        ) if control.isChecked()]
+        if not sources:
+            raise ValueError("Selecciona al menos una fuente para normalizar.")
+        input_name = self._file_name(self._normal_input)
+        args = ["--base-dir", str(PROJECT_ROOT), "--media", *sources,
+                "--input-name", input_name, "--progress-json"]
+        if not self._normal_overwrite.isChecked():
+            output_name = self._file_name(self._normal_output)
+            if input_name == output_name:
+                raise ValueError("El archivo alternativo debe ser distinto del original.")
+            args.extend(["--no-overwrite", "--output-name", output_name])
+        return args
+
+    def _enrichment_arguments(self) -> list[str]:
+        if self._date_from.date() > self._date_to.date():
+            raise ValueError("La fecha inicial no puede ser posterior a la fecha final.")
+        version = self._dictionary_version.text().strip()
+        if not version:
+            raise ValueError("Indica una versión de diccionario.")
+        input_name = self._file_name(self._enrich_input)
+        output_name = self._file_name(self._enrich_output)
+        if input_name == output_name:
+            raise ValueError("El archivo enriquecido debe ser distinto del archivo de entrada.")
+        sources = (("biobio", "mostrador"), ("biobio",), ("mostrador",))[self._sources.currentIndex()]
+        args = [
+            "--base-dir", str(PROJECT_ROOT), "--sources", *sources,
+            "--date-from", self._date_from.date().toString("yyyy-MM-dd"),
+            "--date-to", self._date_to.date().toString("yyyy-MM-dd"),
+            "--workers", str(self._workers.value()), "--dictionary-version", version,
+            "--input-name", input_name, "--output-name", output_name,
+        ]
+        if self._enrich_overwrite.isChecked():
+            args.append("--overwrite")
+        if not self._use_candidates.isChecked():
+            args.append("--no-candidates")
+        return args
+
+    def _run_normalization(self) -> None:
+        try:
+            args = self._normalization_arguments()
+        except ValueError as exc:
+            self._append_console(f"[WARN] {exc}\n")
+            return
+        self._start_process("normalización", PROJECT_ROOT / "03_normalizador_noticias.py", args)
+
+    def _run_enrichment(self) -> None:
+        try:
+            args = self._enrichment_arguments()
+        except ValueError as exc:
+            self._append_console(f"[WARN] {exc}\n")
+            return
+        self._start_process("enriquecimiento", PROJECT_ROOT / "06_enriquecer_noticias.py", args)
+
+    def _start_process(self, step: str, script: Path, args: list[str]) -> None:
+        if self._process.state() != QProcess.ProcessState.NotRunning:
+            self._append_console("[WARN] Ya hay un proceso en ejecución.\n")
+            return
+        self._active_step = step
+        self._stopping = False
+        self._decoder.reset()
+        self._output_buffer = ""
+        if step == "normalización":
+            for label in self._normal_stats.values():
+                label.setText("0")
+        self._step_status().setText("EN EJECUCION")
+        self._set_running(True)
+        self._append_console(f"\n[INFO] Iniciando {step}.\n")
+        self._process.start(sys.executable, ["-u", "-X", "utf8", str(script), *args])
+
+    def _step_status(self) -> QLabel:
+        if self._active_step == "CMF":
+            return self._cmf_status
+        return self._normal_status if self._active_step == "normalización" else self._enrich_status
+
+    def _set_running(self, running: bool) -> None:
+        self._normal_button.setEnabled(not running)
+        self._enrich_button.setEnabled(not running)
+        self._cmf_button.setEnabled(not running)
+        for control in (*self._cmf_funds.values(), self._cmf_from, self._cmf_to,
+                        self._cmf_max_days, self._cmf_skip):
+            control.setEnabled(not running)
+        self._cmf_code.setEnabled(False)
+        self._cmf_send.setEnabled(False)
+        self._stop.setEnabled(running)
+        for control in (
+            self._normal_biobio, self._normal_mostrador, self._normal_input,
+            self._normal_overwrite, self._date_from, self._date_to, self._sources,
+            self._workers, self._dictionary_version, self._use_candidates,
+            self._enrich_overwrite, self._enrich_input, self._enrich_output,
+        ):
+            control.setEnabled(not running)
+        self._normal_output.setEnabled(not running and not self._normal_overwrite.isChecked())
+
+    def _append_console(self, text: str) -> None:
+        cursor = self._console.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(text)
+        self._console.setTextCursor(cursor)
+        self._console.ensureCursorVisible()
+
+    def _consume_output(self, output: str, *, final: bool = False) -> None:
+        self._output_buffer += output
+        lines = self._output_buffer.split("\n")
+        self._output_buffer = lines.pop()
+        if final and self._output_buffer:
+            lines.append(self._output_buffer)
+            self._output_buffer = ""
+        for line in lines:
+            if line.startswith("[CMF_CAPTCHA] ") and self._active_step == "CMF":
+                try:
+                    path = Path(json.loads(line[len("[CMF_CAPTCHA] "):])["path"]).resolve()
+                    if path != (PROJECT_ROOT / "captcha.png").resolve():
+                        raise ValueError("Ruta de CAPTCHA inesperada")
+                    pixmap = QPixmap(str(path))
+                    if pixmap.isNull():
+                        raise ValueError("No se pudo cargar la imagen CAPTCHA")
+                    self._cmf_image.setPixmap(pixmap.scaled(264, 92, Qt.AspectRatioMode.KeepAspectRatio,
+                                                           Qt.TransformationMode.SmoothTransformation))
+                    self._cmf_code.clear()
+                    self._cmf_code.setEnabled(True)
+                    self._cmf_send.setEnabled(True)
+                    self._cmf_code.setFocus()
+                    self._cmf_status.setText("ESPERANDO CAPTCHA")
+                except (ValueError, KeyError, TypeError) as exc:
+                    self._append_console(f"[ERROR] {exc}\n")
+                    self._stop_process()
+                continue
+            prefix = "[NORMALIZATION_PROGRESS] "
+            if line.startswith(prefix):
+                try:
+                    counters = json.loads(line[len(prefix):])
+                    for key, label in self._normal_stats.items():
+                        label.setText(str(counters[key]))
+                except (ValueError, KeyError, TypeError):
+                    self._append_console("[WARN] No se pudo leer el progreso de normalización.\n")
+            else:
+                self._append_console(line + "\n")
+
+    def _read_process_output(self) -> None:
+        self._consume_output(self._decoder.decode(bytes(self._process.readAllStandardOutput())))
+
+    def _process_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        self._kill_timer.stop()
+        self._read_process_output()
+        self._consume_output(self._decoder.decode(b"", final=True), final=True)
+        if self._stopping:
+            status, message = "DETENIDO", f"[INFO] {self._active_step}: proceso detenido."
+        elif exit_code == 0 and exit_status == QProcess.ExitStatus.NormalExit:
+            status, message = "TERMINADO", f"[OK] {self._active_step}: proceso terminado."
+        else:
+            status, message = "ERROR", f"[ERROR] {self._active_step}: código {exit_code}. Revisa la salida anterior."
+        self._step_status().setText(status)
+        self._append_console(message + "\n")
+        self._active_step = None
+        self._stopping = False
+        self._set_running(False)
+        self._refresh_latest_enriched()
+        self._refresh_latest_cmf()
+
+    def _process_error(self, error: QProcess.ProcessError) -> None:
+        if self._stopping and error == QProcess.ProcessError.Crashed:
+            return
+        self._append_console(f"[ERROR] {self._process.errorString()}\n")
+        if error == QProcess.ProcessError.FailedToStart:
+            self._step_status().setText("ERROR")
+            self._active_step = None
+            self._set_running(False)
+
+    def _stop_process(self) -> None:
+        if self._process.state() == QProcess.ProcessState.NotRunning or self._stopping:
+            return
+        self._stopping = True
+        self._stop.setEnabled(False)
+        self._append_console(f"[INFO] Deteniendo {self._active_step}...\n")
+        self._process.terminate()
+        self._kill_timer.start(3_000)
+
+    def _shutdown(self) -> None:
+        self._kill_timer.stop()
+        if self._process.state() != QProcess.ProcessState.NotRunning:
+            self._stopping = True
+            self._process.kill()
+            self._process.waitForFinished(1_000)
 
     @staticmethod
     def _build_panel(index: str, title_text: str) -> tuple[QFrame, QVBoxLayout]:
@@ -242,7 +607,7 @@ class NewsEnrichmentView(QWidget):
         field = CalendarDateEdit(QDate(value.year, value.month, value.day))
         field.setObjectName("NewsInput")
         field.setCalendarPopup(True)
-        field.setDisplayFormat("yyyy-MM-dd")
+        field.setDisplayFormat("dd-MM-yyyy")
         return field
 
     @staticmethod
@@ -297,14 +662,3 @@ class NewsEnrichmentView(QWidget):
         layout.addWidget(label)
         layout.addWidget(value)
         return frame
-
-
-_CONSOLE_TEXT = """21:04:13  [INFO]  [01] Normalizacion iniciada: noticias_dia.txt | fuentes: Bio Bio Chile, El Mostrador
-21:04:24  [OK]    [01] Normalizacion completada | procesadas: 1195 | normalizadas: 1195 | errores: 0
-21:04:25  [INFO]  [02] Enriquecimiento iniciado | diccionario: v2026-06-25 | workers: 4
-21:04:33  [INFO]  [02] Enriqueciendo lotes 1/4 (300/1195) ------------------------- 25%
-21:04:41  [INFO]  [02] Enriqueciendo lotes 2/4 (600/1195) ------------------------- 50%
-21:04:58  [OK]    [02] Enriquecimiento completado | enriquecidas: 1195 | sin match: 87
-21:04:59  [INFO]  [03] Descarga CMF iniciada | 4 fondos | tramo: 31 dias
-21:05:28  [OK]    [03] Descarga completada | archivos nuevos: 124 | omitidos: 31 | errores: 0
-21:05:28  [OK]    Flujo completo finalizado correctamente."""

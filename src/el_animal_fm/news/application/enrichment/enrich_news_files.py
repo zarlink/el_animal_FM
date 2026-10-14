@@ -70,7 +70,17 @@ def enrich_news_file(input_path: Path, compiled: dict[str, list[tuple[TermEntry,
 
 def enrich_files_parallel(files: list[Path], compiled: dict[str, list[tuple[TermEntry, re.Pattern]]], dictionary_version: str, output_name: str, overwrite: bool, workers: int) -> list[dict[str, Any]]:
     if workers <= 1:
-        return [enrich_news_file(path, compiled, dictionary_version, output_name, overwrite) for path in files]
+        summaries = []
+        for idx, path in enumerate(files, start=1):
+            try:
+                summary = enrich_news_file(path, compiled, dictionary_version, output_name, overwrite)
+            except Exception as exc:
+                summary = {"input_path": str(path), "status": "error", "error": f"worker_error: {exc}"}
+            print(f"[{idx}/{len(files)}] {summary.get('status')}: {path}", flush=True)
+            if summary.get("error"):
+                print(f"[ERROR] {path}: {summary['error']}", flush=True)
+            summaries.append(summary)
+        return summaries
     summaries: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {executor.submit(enrich_news_file, path, compiled, dictionary_version, output_name, overwrite): path for path in files}
@@ -81,5 +91,7 @@ def enrich_files_parallel(files: list[Path], compiled: dict[str, list[tuple[Term
             except Exception as exc:
                 summary = {"input_path": str(path), "status": "error", "error": f"worker_error: {exc}"}
             print(f"[{idx}/{len(files)}] {summary.get('status')}: {path}")
+            if summary.get("error"):
+                print(f"[ERROR] {path}: {summary['error']}", flush=True)
             summaries.append(summary)
     return summaries

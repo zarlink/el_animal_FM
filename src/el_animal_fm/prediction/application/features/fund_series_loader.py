@@ -11,11 +11,15 @@ from el_animal_fm.prediction.application.shared.prediction_utils import safe_flo
 from el_animal_fm.prediction.infrastructure.output_paths import DOWNLOADS_DIR
 
 def discover_fund_files(fund_key: str) -> list[Path]:
-    folder = DOWNLOADS_DIR / str(FUND_CONFIG[fund_key]["folder"])
-    if not folder.exists():
-        print(f"[WARN] No existe carpeta: {folder}")
-        return []
-    return sorted(folder.glob("*.txt"))
+    config = FUND_CONFIG[fund_key]
+    folder = DOWNLOADS_DIR / str(config["folder"])
+    # The CMF catalog may use a different label for the same RUN_FM.
+    folders = {folder}
+    folders.update(path for path in DOWNLOADS_DIR.glob(f"{config['run_fm']}_*") if path.is_dir())
+    files = sorted({path for directory in folders for path in directory.glob("*.txt")})
+    if not files:
+        print(f"[WARN] No hay archivos CMF para RUN_FM={config['run_fm']}: {DOWNLOADS_DIR}")
+    return files
 
 def read_cmf_file(path: Path) -> pd.DataFrame:
     try:

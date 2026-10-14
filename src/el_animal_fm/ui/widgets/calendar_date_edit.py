@@ -1,12 +1,56 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
+from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPalette, QPen
 from PySide6.QtWidgets import QDateEdit
 
 
 class CalendarDateEdit(QDateEdit):
     """Date selector with a dashboard-style calendar glyph."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setCalendarPopup(True)
+        calendar = self.calendarWidget()
+        palette = calendar.palette()
+        for role, color in (
+            (QPalette.ColorRole.Window, "#061012"),
+            (QPalette.ColorRole.Base, "#061012"),
+            (QPalette.ColorRole.AlternateBase, "#092024"),
+            (QPalette.ColorRole.Button, "#092024"),
+            (QPalette.ColorRole.Text, "#d7faff"),
+            (QPalette.ColorRole.WindowText, "#d7faff"),
+            (QPalette.ColorRole.ButtonText, "#d7faff"),
+            (QPalette.ColorRole.Highlight, "#18dce8"),
+            (QPalette.ColorRole.HighlightedText, "#061012"),
+        ):
+            palette.setColor(role, QColor(color))
+        calendar.setPalette(palette)
+        calendar.setStyleSheet("""
+            QCalendarWidget QWidget {
+                background-color: #061012;
+                color: #d7faff;
+            }
+            QCalendarWidget QAbstractItemView {
+                background-color: #061012;
+                alternate-background-color: #092024;
+                color: #d7faff;
+                selection-background-color: #18dce8;
+                selection-color: #061012;
+            }
+            QCalendarWidget QToolButton, QCalendarWidget QSpinBox {
+                background-color: #092024;
+                color: #d7faff;
+            }
+            QCalendarWidget QMenu {
+                background-color: #061012;
+                color: #d7faff;
+            }
+            QCalendarWidget QMenu::item:selected {
+                background-color: #18dce8;
+                color: #061012;
+            }
+        """)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
