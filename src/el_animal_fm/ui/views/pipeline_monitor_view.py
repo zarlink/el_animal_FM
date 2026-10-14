@@ -215,7 +215,7 @@ class PipelineMonitorView(QWidget):
         if self._process.state() != QProcess.ProcessState.NotRunning:
             return
         start, end = self._date_range()
-        self._range_value.setText(f"DESDE: {start.isoformat()}    HASTA: {end.isoformat()}")
+        self._range_value.setText(f"DESDE: {start:%d-%m-%Y}    HASTA: {end:%d-%m-%Y}")
 
     def _command_arguments(self, sources: list[str], end_date: str) -> list[str]:
         args = [
@@ -244,7 +244,7 @@ class PipelineMonitorView(QWidget):
         self._stopping = False
         self._decoder.reset()
         self._log(f"[INFO] Iniciando descarga: {', '.join(sources)}.")
-        self._log(f"[INFO] Rango: {start.isoformat()} a {end.isoformat()} ({self._days.value()} días).")
+        self._log(f"[INFO] Rango: {start:%d-%m-%Y} a {end:%d-%m-%Y} ({self._days.value()} días).")
         self._log(f"[INFO] Pausa: {self._pause.value()} s. Conservar noticias existentes: {self._keep_existing.isChecked()}.")
         self._set_running(True)
         self._process.start(sys.executable, self._command_arguments(sources, end.isoformat()))

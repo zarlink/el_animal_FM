@@ -3,11 +3,11 @@ from __future__ import annotations
 import codecs
 import json
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QDate, QProcess, QTimer, Qt
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -29,6 +29,7 @@ from el_animal_fm.news.application.enrichment.enrichment_config import (
     DEFAULT_DICTIONARY_VERSION, DEFAULT_INPUT_NAME, DEFAULT_OUTPUT_NAME,
 )
 from el_animal_fm.news.infrastructure.dates import today_chile
+from el_animal_fm.funds.infrastructure.cmf_storage import latest_downloaded_date
 from el_animal_fm.ui.widgets.calendar_date_edit import CalendarDateEdit
 
 
@@ -172,6 +173,16 @@ class NewsEnrichmentView(QWidget):
         files.addWidget(self._enrich_output, 1, 1)
         body.addLayout(files)
 
+        body.addWidget(self._field_label("ULTIMO DIA ENRIQUECIDO POR FUENTE"))
+        self._latest_enriched = QLabel()
+        self._latest_enriched.setObjectName("NewsFieldLabel")
+        self._latest_enriched.setWordWrap(True)
+        self._latest_enriched.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        body.addWidget(self._latest_enriched)
+        self._enrich_output.textChanged.connect(self._refresh_latest_enriched)
+        self._sources.currentIndexChanged.connect(self._refresh_latest_enriched)
+        self._refresh_latest_enriched()
+
         body.addStretch(1)
         self._enrich_status = self._field_label("PENDIENTE")
         body.addWidget(self._enrich_status)
@@ -181,6 +192,47 @@ class NewsEnrichmentView(QWidget):
         body.addWidget(self._script_label("06_enriquecer_noticias.py"))
         return panel
 
+    def _refresh_latest_enriched(self) -> None:
+        output_name = self._enrich_output.text().strip()
+        selected = self._sources.currentIndex()
+        lines = []
+        paths = []
+        for index, (source, title) in enumerate((("biobio", "BioBio"), ("mostrador", "El Mostrador")), 1):
+            if selected not in (0, index):
+                continue
+            candidates = []
+            source_dir = PROJECT_ROOT / source
+            if output_name and Path(output_name).name == output_name and source_dir.is_dir():
+                for day_dir in source_dir.iterdir():
+                    try:
+                        day = datetime.strptime(day_dir.name, "%d_%m_%Y").date()
+                    except ValueError:
+                        continue
+                    output = day_dir / output_name
+                    if output.is_file():
+                        candidates.append((day, output))
+            latest = None
+            for day, output in sorted(candidates, reverse=True):
+                try:
+                    payload = json.loads(output.read_text(encoding="utf-8"))
+                    if (isinstance(payload, dict)
+                            and isinstance(payload.get("metadata"), dict)
+                            and payload["metadata"].get("features_enriched") is True
+                            and isinstance(payload.get("articles"), list)):
+                        latest = day
+                        paths.append(str(output))
+                        break
+                except (OSError, ValueError):
+                    continue
+            lines.append(f"{title}: {latest.strftime('%d-%m-%Y') if latest else 'Sin archivos enriquecidos'}")
+        self._latest_enriched.setText("\n".join(lines))
+        self._latest_enriched.setToolTip("\n".join(paths))
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._refresh_latest_enriched()
+        self._refresh_latest_cmf()
+
     def _build_cmf_panel(self) -> QFrame:
         panel, body = self._build_panel("03", "DESCARGAR VALORES CMF")
 
@@ -189,8 +241,12 @@ class NewsEnrichmentView(QWidget):
         funds.setHorizontalSpacing(10)
         funds.setVerticalSpacing(5)
         labels = ("CARTERA BALANCEADO", "NATIONAL EQUITY", "TOESCA EQUITY", "AHORRO UF ITAU")
+        self._cmf_funds = {}
+        keys = ("balanceado", "national_equity", "toesca_equity", "itau_ahorro_uf")
         for index, label in enumerate(labels):
-            funds.addWidget(self._checkbox(label, checked=True), index // 2, index % 2)
+            checkbox = self._checkbox(label, checked=True)
+            self._cmf_funds[keys[index]] = checkbox
+            funds.addWidget(checkbox, index // 2, index % 2)
         body.addLayout(funds)
 
         dates = QGridLayout()
@@ -199,8 +255,10 @@ class NewsEnrichmentView(QWidget):
         today = date.today()
         dates.addWidget(self._field_label("FECHA INICIAL"), 0, 0)
         dates.addWidget(self._field_label("FECHA FINAL"), 0, 1)
-        dates.addWidget(self._date_edit(today - timedelta(days=30)), 1, 0)
-        dates.addWidget(self._date_edit(today), 1, 1)
+        self._cmf_from = self._date_edit(today - timedelta(days=30))
+        self._cmf_to = self._date_edit(today)
+        dates.addWidget(self._cmf_from, 1, 0)
+        dates.addWidget(self._cmf_to, 1, 1)
         body.addLayout(dates)
 
         request_options = QGridLayout()
@@ -210,26 +268,81 @@ class NewsEnrichmentView(QWidget):
         max_days.setObjectName("NewsInput")
         max_days.setRange(1, 31)
         max_days.setValue(31)
+        self._cmf_max_days = max_days
         request_options.addWidget(max_days, 1, 0)
-        request_options.addWidget(self._checkbox("OMITIR EXISTENTES"), 1, 1)
+        self._cmf_skip = self._checkbox("OMITIR EXISTENTES")
+        request_options.addWidget(self._cmf_skip, 1, 1)
         body.addLayout(request_options)
 
         body.addWidget(self._separator())
         body.addWidget(self._field_label("CAPTCHA"))
         captcha_row = QHBoxLayout()
-        captcha = QLabel("A 7 K 2")
+        self._cmf_image = captcha = QLabel("Sin CAPTCHA pendiente")
         captcha.setObjectName("NewsCaptcha")
         captcha.setAlignment(Qt.AlignmentFlag.AlignCenter)
         captcha_row.addWidget(captcha, stretch=1)
-        captcha_status = QLabel("ESTADO: LISTO\nRENOVACION AUTO: 02:47")
+        self._cmf_status = captcha_status = QLabel("PENDIENTE")
         captcha_status.setObjectName("NewsSuccess")
         captcha_row.addWidget(captcha_status, stretch=2)
         body.addLayout(captcha_row)
+        self._cmf_latest = self._field_label("")
+        self._cmf_latest.setWordWrap(True)
+        self._cmf_latest.setToolTip("Fecha más reciente del campo FECHA_INF entre todos los fondos descargados.")
+        body.addWidget(self._cmf_latest)
+        self._refresh_latest_cmf()
+        self._cmf_code = self._line_edit("")
+        self._cmf_code.setPlaceholderText("Escribe el código de la imagen")
+        self._cmf_code.setEnabled(False)
+        self._cmf_code.returnPressed.connect(self._send_cmf_captcha)
+        body.addWidget(self._cmf_code)
+        self._cmf_send = self._secondary_button("ENVIAR CAPTCHA")
+        self._cmf_send.setEnabled(False)
+        self._cmf_send.clicked.connect(self._send_cmf_captcha)
+        body.addWidget(self._cmf_send)
 
         body.addStretch(1)
-        body.addWidget(self._primary_button("▶  INICIAR DESCARGA CMF"))
+        self._cmf_button = self._primary_button("▶  INICIAR DESCARGA CMF")
+        self._cmf_button.clicked.connect(self._run_cmf)
+        body.addWidget(self._cmf_button)
         body.addWidget(self._script_label("08_descarga_fondos_mutuos.py"))
         return panel
+
+    def _refresh_latest_cmf(self) -> None:
+        latest = latest_downloaded_date(PROJECT_ROOT / "downloads")
+        value = latest.strftime("%d-%m-%Y") if latest else "Sin datos descargados"
+        self._cmf_latest.setText(f"ÚLTIMO DÍA CMF DESCARGADO: {value}")
+
+    def _cmf_arguments(self) -> list[str]:
+        funds = [key for key, checkbox in self._cmf_funds.items() if checkbox.isChecked()]
+        if not funds:
+            raise ValueError("Selecciona al menos un fondo CMF.")
+        if self._cmf_from.date() > self._cmf_to.date():
+            raise ValueError("La fecha inicial CMF no puede ser posterior a la final.")
+        args = ["--gui", "--base-dir", str(PROJECT_ROOT), "--fund", *funds,
+                "--start-date", self._cmf_from.date().toString("yyyy-MM-dd"),
+                "--end-date", self._cmf_to.date().toString("yyyy-MM-dd"),
+                "--max-days-per-request", str(self._cmf_max_days.value())]
+        if self._cmf_skip.isChecked():
+            args.append("--skip-existing")
+        return args
+
+    def _run_cmf(self) -> None:
+        try:
+            args = self._cmf_arguments()
+        except ValueError as exc:
+            self._append_console(f"[WARN] {exc}\n")
+            return
+        self._start_process("CMF", PROJECT_ROOT / "08_descarga_fondos_mutuos.py", args)
+
+    def _send_cmf_captcha(self) -> None:
+        code = self._cmf_code.text().strip()
+        if not code or not self._cmf_send.isEnabled() or self._active_step != "CMF":
+            return
+        self._process.write((code + "\n").encode("utf-8"))
+        self._cmf_code.clear()
+        self._cmf_code.setEnabled(False)
+        self._cmf_send.setEnabled(False)
+        self._cmf_status.setText("VALIDANDO CAPTCHA")
 
     def _build_console(self) -> QFrame:
         panel = QFrame()
@@ -342,11 +455,19 @@ class NewsEnrichmentView(QWidget):
         self._process.start(sys.executable, ["-u", "-X", "utf8", str(script), *args])
 
     def _step_status(self) -> QLabel:
+        if self._active_step == "CMF":
+            return self._cmf_status
         return self._normal_status if self._active_step == "normalización" else self._enrich_status
 
     def _set_running(self, running: bool) -> None:
         self._normal_button.setEnabled(not running)
         self._enrich_button.setEnabled(not running)
+        self._cmf_button.setEnabled(not running)
+        for control in (*self._cmf_funds.values(), self._cmf_from, self._cmf_to,
+                        self._cmf_max_days, self._cmf_skip):
+            control.setEnabled(not running)
+        self._cmf_code.setEnabled(False)
+        self._cmf_send.setEnabled(False)
         self._stop.setEnabled(running)
         for control in (
             self._normal_biobio, self._normal_mostrador, self._normal_input,
@@ -372,6 +493,25 @@ class NewsEnrichmentView(QWidget):
             lines.append(self._output_buffer)
             self._output_buffer = ""
         for line in lines:
+            if line.startswith("[CMF_CAPTCHA] ") and self._active_step == "CMF":
+                try:
+                    path = Path(json.loads(line[len("[CMF_CAPTCHA] "):])["path"]).resolve()
+                    if path != (PROJECT_ROOT / "captcha.png").resolve():
+                        raise ValueError("Ruta de CAPTCHA inesperada")
+                    pixmap = QPixmap(str(path))
+                    if pixmap.isNull():
+                        raise ValueError("No se pudo cargar la imagen CAPTCHA")
+                    self._cmf_image.setPixmap(pixmap.scaled(264, 92, Qt.AspectRatioMode.KeepAspectRatio,
+                                                           Qt.TransformationMode.SmoothTransformation))
+                    self._cmf_code.clear()
+                    self._cmf_code.setEnabled(True)
+                    self._cmf_send.setEnabled(True)
+                    self._cmf_code.setFocus()
+                    self._cmf_status.setText("ESPERANDO CAPTCHA")
+                except (ValueError, KeyError, TypeError) as exc:
+                    self._append_console(f"[ERROR] {exc}\n")
+                    self._stop_process()
+                continue
             prefix = "[NORMALIZATION_PROGRESS] "
             if line.startswith(prefix):
                 try:
@@ -401,6 +541,8 @@ class NewsEnrichmentView(QWidget):
         self._active_step = None
         self._stopping = False
         self._set_running(False)
+        self._refresh_latest_enriched()
+        self._refresh_latest_cmf()
 
     def _process_error(self, error: QProcess.ProcessError) -> None:
         if self._stopping and error == QProcess.ProcessError.Crashed:
@@ -465,7 +607,7 @@ class NewsEnrichmentView(QWidget):
         field = CalendarDateEdit(QDate(value.year, value.month, value.day))
         field.setObjectName("NewsInput")
         field.setCalendarPopup(True)
-        field.setDisplayFormat("yyyy-MM-dd")
+        field.setDisplayFormat("dd-MM-yyyy")
         return field
 
     @staticmethod

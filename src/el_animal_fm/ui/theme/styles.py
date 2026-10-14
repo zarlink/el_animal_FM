@@ -166,9 +166,15 @@ QWidget {
     font-size: 12px;
 }
 
-#ConsoleLine {
+#ConsoleLine,
+#ExecutionConsoleText {
     color: #65ff5f;
     font-size: 12px;
+}
+
+#ExecutionConsoleText {
+    background: #050a0c;
+    border: none;
 }
 
 #ChartRow,
