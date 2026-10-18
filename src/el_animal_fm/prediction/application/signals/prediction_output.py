@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from el_animal_fm.prediction.application.features.dataset_builder import get_feature_columns
+from el_animal_fm.prediction.application.features.decision_scenarios import scenario_label, assert_model_scenario
 from el_animal_fm.prediction.application.xgboost.ml_dependencies import import_ml_dependencies
 from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
 from el_animal_fm.prediction.application.shared.prediction_utils import parse_user_time
@@ -147,7 +148,9 @@ def build_prediction_output(
         "ma5_vs_ma20",
     ]
 
-    cols = [c for c in prediction_base_cols + semaforo_feature_cols if c in source_df.columns]
+    scenario_cols = ["decision_date", "quote_date", "quote_available_date", "news_reference_date",
+                     "withdrawal_start_date", "target_available_date", "prediction_scenario", "quote_age_calendar_days"]
+    cols = [c for c in prediction_base_cols + semaforo_feature_cols + scenario_cols if c in source_df.columns]
     predictions = source_df[cols].copy()
 
     # Asegura columnas base aunque sea señal live sin futuro conocido.
@@ -222,10 +225,11 @@ def predict_live_from_saved_model(
     joblib = deps["joblib"]
 
     cfg = FUND_CONFIG[fund_key]
-    horizon = int(cfg["horizon_business_days"])
+    options = dataset.attrs.get("prediction_scenario", {"name": "legacy"})
+    horizon = int(options.get("horizon_business_days", cfg["horizon_business_days"]))
     dataset = dataset.sort_index()
 
-    effective_mode_label = mode_label or decision_mode
+    effective_mode_label = scenario_label(mode_label or decision_mode, options)
     experiment_key = build_experiment_key(
         fund_key=fund_key,
         mode_label=effective_mode_label,
@@ -242,6 +246,12 @@ def predict_live_from_saved_model(
         )
 
     payload = joblib.load(model_path)
+    assert_model_scenario(payload, dataset)
+    if (payload.get("decision_mode") != decision_mode
+            or payload.get("decision_time") != decision_time_text
+            or payload.get("use_same_day_return_features") != use_same_day_return_features
+            or payload.get("selected_series") != selected_series):
+        raise ValueError("La modalidad, corte, variables o serie no coincide con el modelo guardado")
     model = payload["model"]
     feature_cols = list(payload.get("feature_cols", []))
     if not feature_cols:
@@ -260,6 +270,10 @@ def predict_live_from_saved_model(
         print(f"[WARN] Sin filas para señal live de {fund_key} entre {eval_start} y {eval_end}.")
         return None
 
+    if options.get("name") != "legacy":
+        missing = set(feature_cols) - set(live_df.columns)
+        if missing:
+            raise ValueError(f"Faltan variables del modelo: {sorted(missing)}")
     X_live = live_df.copy()
     for col in feature_cols:
         if col not in X_live.columns:

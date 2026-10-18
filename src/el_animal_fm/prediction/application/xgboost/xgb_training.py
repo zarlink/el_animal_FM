@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from el_animal_fm.prediction.application.features.dataset_builder import get_feature_columns
+from el_animal_fm.prediction.application.features.decision_scenarios import scenario_label, split_evaluable_dataset
 from el_animal_fm.prediction.application.xgboost.ml_dependencies import import_ml_dependencies
 from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
 from el_animal_fm.prediction.application.signals.prediction_output import build_experiment_key, build_prediction_output, select_live_rows
@@ -40,15 +41,15 @@ def train_and_evaluate_fund(
     joblib = deps["joblib"]
 
     cfg = FUND_CONFIG[fund_key]
-    horizon = int(cfg["horizon_business_days"])
+    options = dataset.attrs.get("prediction_scenario", {"name": "legacy"})
+    horizon = int(options.get("horizon_business_days", cfg["horizon_business_days"]))
     dataset = dataset.sort_index()
 
     # Dataset completo conserva filas live sin futuro conocido.
     # Dataset evaluable se usa solamente para entrenamiento y métricas históricas.
     evaluated_dataset = dataset[dataset["future_valor_cuota"] > 0].copy()
 
-    train_df = evaluated_dataset[(evaluated_dataset.index >= pd.Timestamp(train_start)) & (evaluated_dataset.index <= pd.Timestamp(train_end))].copy()
-    eval_df = evaluated_dataset[(evaluated_dataset.index >= pd.Timestamp(eval_start)) & (evaluated_dataset.index <= pd.Timestamp(eval_end))].copy()
+    train_df, eval_df = split_evaluable_dataset(dataset, train_start, train_end, eval_start, eval_end)
 
     print(f"  Dataset total: {len(dataset)} filas | evaluables: {len(evaluated_dataset)} | live/no evaluables: {len(dataset) - len(evaluated_dataset)}")
     if len(dataset):
@@ -92,6 +93,7 @@ def train_and_evaluate_fund(
             tune_iter,
             XGBClassifier,
             deps["balanced_accuracy_score"],
+            label_available_dates=train_df.get("target_available_date"),
         )
     elif xgb_params_override:
         best_params = merge_xgb_params(scale_pos_weight, xgb_params_override)
@@ -106,7 +108,7 @@ def train_and_evaluate_fund(
 
     metrics = evaluate_predictions(y_eval, y_pred, y_prob, eval_df["future_return_h"].values, deps)
 
-    effective_mode_label = mode_label or decision_mode
+    effective_mode_label = scenario_label(mode_label or decision_mode, options)
     experiment_key = build_experiment_key(
         fund_key=fund_key,
         mode_label=effective_mode_label,
@@ -133,6 +135,7 @@ def train_and_evaluate_fund(
             "decision_mode": decision_mode,
             "decision_time": decision_time_text,
             "use_same_day_return_features": use_same_day_return_features,
+            "prediction_scenario": options,
         },
         model_path,
     )
@@ -220,4 +223,5 @@ def train_and_evaluate_fund(
         feature_importance_path=str(importance_path),
         dataset_path=str(dataset_path),
         live_predictions_path=str(live_predictions_path) if live_predictions_path else None,
+        prediction_scenario=options,
     )

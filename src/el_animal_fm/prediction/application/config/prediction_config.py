@@ -4,6 +4,32 @@ from typing import Any
 
 RANDOM_SEED = 42
 
+# Escenarios operativos para CLI. "legacy" conserva las modalidades anteriores.
+# El desfase de publicación se expresa en días calendario; el retiro, en hábiles.
+PREDICTION_SCENARIOS = {
+    "legacy": {},
+    "cmf_date_news": {"news_reference": "quote_date", "quote_lag_days": 1},
+    "decision_date_news": {"news_reference": "decision_date", "quote_lag_days": 1},
+}
+BUSINESS_WEEKMASK = "Mon Tue Wed Thu Fri"
+# Fechas ISO de feriados aplicables a la operación. No se infieren de huecos CMF.
+BUSINESS_HOLIDAYS: tuple[str, ...] = ()
+
+# Overrides independientes por fondo y escenario. Los parámetros no indicados
+# heredan FUND_MODEL_CONFIG y el horizonte de FUND_CONFIG.
+FUND_SCENARIO_CONFIG: dict[str, dict[str, dict[str, Any]]] = {
+    "crecimiento_balanceado": {
+        "cmf_date_news": {
+            "decision_mode": "same_day_close", "decision_time": None,
+            "quote_lag_days": 1, "horizon_business_days": 4,
+        },
+        "decision_date_news": {
+            "decision_mode": "same_day_close", "decision_time": None,
+            "quote_lag_days": 1, "horizon_business_days": 4,
+        },
+    },
+}
+
 # =============================================================================
 # Configuración de fondos
 # =============================================================================

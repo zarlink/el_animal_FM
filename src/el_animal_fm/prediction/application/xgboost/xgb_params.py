@@ -93,7 +93,7 @@ def generate_param_candidates(scale_pos_weight: float, n_iter: int) -> list[dict
         candidates.append(params)
     return candidates
 
-def tune_params(X_train, y_train, scale_pos_weight, n_iter, XGBClassifier, balanced_accuracy_score) -> dict[str, Any]:
+def tune_params(X_train, y_train, scale_pos_weight, n_iter, XGBClassifier, balanced_accuracy_score, label_available_dates=None) -> dict[str, Any]:
     if len(X_train) < 80 or y_train.nunique() < 2:
         print("[WARN] Pocos datos o una sola clase. Se usará configuración base.")
         return base_xgb_params(scale_pos_weight)
@@ -101,6 +101,12 @@ def tune_params(X_train, y_train, scale_pos_weight, n_iter, XGBClassifier, balan
     split = int(len(X_train) * 0.8)
     X_sub, y_sub = X_train.iloc[:split], y_train.iloc[:split]
     X_val, y_val = X_train.iloc[split:], y_train.iloc[split:]
+    if label_available_dates is not None:
+        known = label_available_dates.iloc[:split] <= X_sub.index.max()
+        X_sub, y_sub = X_sub.loc[known], y_sub.loc[known]
+        if X_sub.empty or y_sub.nunique() < 2:
+            print("[WARN] Sin suficiente historia conocida para tuning interno; se usan parámetros base.")
+            return base_xgb_params(scale_pos_weight)
 
     best_score = -1.0
     best_params = base_xgb_params(scale_pos_weight)

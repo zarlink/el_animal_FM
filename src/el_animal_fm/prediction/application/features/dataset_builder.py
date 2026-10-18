@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -8,6 +8,7 @@ import pandas as pd
 from el_animal_fm.prediction.application.features.fund_feature_builder import add_fund_features, add_targets
 from el_animal_fm.prediction.application.features.fund_series_loader import load_fund_data
 from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
+from el_animal_fm.prediction.application.features.decision_scenarios import align_decision_dataset
 
 def build_dataset_for_fund(
     fund_key: str,
@@ -15,7 +16,15 @@ def build_dataset_for_fund(
     end: date,
     news_df: pd.DataFrame,
     target_threshold: float,
+    *,
+    scenario: dict | None = None,
 ) -> tuple[pd.DataFrame, str]:
+    if scenario is not None and scenario.get("name", "legacy") != "legacy":
+        business_day = pd.offsets.CustomBusinessDay(weekmask=scenario["weekmask"], holidays=scenario["holidays"])
+        target_end = (pd.Timestamp(end) + scenario["horizon_business_days"] * business_day).date()
+        fund_df, serie = load_fund_data(fund_key, start - timedelta(days=120), target_end)
+        return align_decision_dataset(add_fund_features(fund_df), news_df, start, end,
+                                      target_threshold, scenario), serie
     horizon = int(FUND_CONFIG[fund_key]["horizon_business_days"])
     fund_df, serie = load_fund_data(fund_key, start, end)
     fund_features = add_fund_features(fund_df)
@@ -39,6 +48,8 @@ def get_feature_columns(df: pd.DataFrame, use_same_day_return_features: bool = T
         "PATRIMONIO_NETO", "ACTIVO_TOT", "NUM_PARTICIPES", "REM_FIJA",
         "REM_VARIABLE", "GASTOS_AFECTOS", "GASTOS_NO_AFECTOS",
         "COMISION_INVERSION", "COMISION_RESCATE", "net_flow_cuotas_raw",
+        "decision_date", "quote_date", "quote_available_date", "news_reference_date",
+        "withdrawal_start_date", "target_available_date", "prediction_scenario",
     }
 
     if not use_same_day_return_features:

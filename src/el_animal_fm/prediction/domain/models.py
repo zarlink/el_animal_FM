@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+@dataclass
 class TrainResult:
     experiment_key: str
     mode_label: str
@@ -32,3 +33,4 @@ class TrainResult:
     feature_importance_path: str
     dataset_path: str
     live_predictions_path: str | None
+    prediction_scenario: dict[str, Any] | None = None

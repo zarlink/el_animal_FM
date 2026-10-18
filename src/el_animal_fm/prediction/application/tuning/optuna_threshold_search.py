@@ -10,10 +10,14 @@ import numpy as np
 import pandas as pd
 
 from el_animal_fm.prediction.application.features.dataset_builder import build_dataset_for_fund, get_feature_columns
+from el_animal_fm.prediction.application.features.decision_scenarios import (
+    scenario_options, scenario_label, scenario_report_tag, split_evaluable_dataset,
+)
 from el_animal_fm.prediction.application.xgboost.ml_dependencies import import_ml_dependencies, import_optuna_dependency
 from el_animal_fm.prediction.application.features.news_feature_builder import load_news_features
 from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG, RANDOM_SEED, THRESHOLD_SEARCH_SPACE, get_decision_mode_config
 from el_animal_fm.prediction.application.shared.prediction_utils import parse_user_time
+from el_animal_fm.prediction.application.config.runtime_config import get_runtime_config_for_fund
 from el_animal_fm.prediction.application.xgboost.xgb_evaluation import build_threshold_score, evaluate_predictions
 from el_animal_fm.prediction.application.xgboost.xgb_params import base_xgb_params
 from el_animal_fm.prediction.infrastructure.output_paths import OUTPUT_DIR, ensure_output_dirs
@@ -36,8 +40,7 @@ def train_eval_for_threshold_trial(
     XGBClassifier = deps["XGBClassifier"]
 
     dataset = dataset.sort_index()
-    train_df = dataset[(dataset.index >= pd.Timestamp(train_start)) & (dataset.index <= pd.Timestamp(train_end))].copy()
-    eval_df = dataset[(dataset.index >= pd.Timestamp(eval_start)) & (dataset.index <= pd.Timestamp(eval_end))].copy()
+    train_df, eval_df = split_evaluable_dataset(dataset, train_start, train_end, eval_start, eval_end)
 
     if len(train_df) < 30 or len(eval_df) < 1:
         raise RuntimeError(f"Filas insuficientes: train={len(train_df)}, eval={len(eval_df)}")
@@ -96,20 +99,29 @@ def run_optuna_threshold_search(
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     ensure_output_dirs()
 
+    fund_runtime_configs = {key: get_runtime_config_for_fund(key, args) for key in funds}
+    report_tag = scenario_report_tag([scenario_options(key, cfg) for key, cfg in fund_runtime_configs.items()])
     news_start = train_start - timedelta(days=10)
     requested_modes = args.optuna_modes
     if not requested_modes or "all" in requested_modes:
         requested_modes = ["strict_lag", "night_partial", "same_day_close"]
     requested_modes = [str(x) for x in requested_modes]
 
-    unique_news_configs: list[tuple[str, str | None]] = []
-    for mode in requested_modes:
-        mode_cfg = get_decision_mode_config(mode)
-        decision_mode = str(mode_cfg["decision_mode"])
-        decision_time_text = str(mode_cfg.get("decision_time")) if decision_mode == "night_partial" else None
-        key = (decision_mode, decision_time_text)
-        if key not in unique_news_configs:
-            unique_news_configs.append(key)
+    def mode_for_fund(mode, runtime):
+        cfg = get_decision_mode_config(str(mode)).copy()
+        if cfg["decision_mode"] == "night_partial" and runtime.get("scenario", "legacy") != "legacy":
+            cfg["decision_time"] = runtime.get("decision_time") or args.decision_time
+        return cfg
+
+    unique_news_configs = []
+    for runtime in fund_runtime_configs.values():
+        for mode in requested_modes:
+            mode_cfg = mode_for_fund(mode, runtime)
+            decision_mode = str(mode_cfg["decision_mode"])
+            decision_time_text = str(mode_cfg.get("decision_time")) if decision_mode == "night_partial" else None
+            key = (decision_mode, decision_time_text)
+            if key not in unique_news_configs:
+                unique_news_configs.append(key)
 
     news_cache: dict[tuple[str, str | None], pd.DataFrame] = {}
     print("\nCargando matrices de noticias para Optuna:")
@@ -157,16 +169,19 @@ def run_optuna_threshold_search(
                 return dataset_cache[cache_key]
 
             news_df = news_cache[(decision_mode, decision_time_text)]
+            options = scenario_options(fund_key, {**fund_runtime_configs[fund_key],
+                                       "decision_mode": decision_mode, "decision_time": decision_time_text})
             dataset, serie = build_dataset_for_fund(
                 fund_key=fund_key,
                 start=train_start,
                 end=eval_end,
                 news_df=news_df,
                 target_threshold=target_threshold,
+                scenario=options,
             )
 
             dataset_suffix = (
-                f"optuna_dataset_{fund_key}_{decision_mode}"
+                f"optuna_dataset_{fund_key}_{scenario_label(decision_mode, options)}"
                 f"_target{target_threshold:.6f}".replace(".", "p")
                 + f"_{train_start}_{eval_end}"
             )
@@ -177,7 +192,7 @@ def run_optuna_threshold_search(
 
         def objective(trial):
             decision_mode = trial.suggest_categorical("decision_mode", available_modes)
-            mode_cfg = get_decision_mode_config(str(decision_mode))
+            mode_cfg = mode_for_fund(decision_mode, fund_runtime_configs[fund_key])
             effective_mode = str(mode_cfg["decision_mode"])
             decision_time_text = str(mode_cfg.get("decision_time")) if effective_mode == "night_partial" else None
 
@@ -197,7 +212,10 @@ def run_optuna_threshold_search(
                     probability_threshold=probability_threshold,
                     decision_mode=effective_mode,
                     decision_time_text=decision_time_text,
-                    use_same_day_return_features=not bool(args.strict_return_lag),
+                    use_same_day_return_features=not bool(
+                        fund_runtime_configs[fund_key]["strict_return_lag"]
+                        if fund_runtime_configs[fund_key].get("scenario", "legacy") != "legacy"
+                        else args.strict_return_lag),
                     target_threshold=target_threshold,
                 )
             except Exception as exc:
@@ -212,6 +230,7 @@ def run_optuna_threshold_search(
                 min_signals_down=args.optuna_min_signals_down,
             )
 
+            trial.set_user_attr("prediction_scenario", dataset.attrs.get("prediction_scenario", {"name": "legacy"}))
             trial.set_user_attr("fund_key", fund_key)
             trial.set_user_attr("fund_label", str(FUND_CONFIG[fund_key]["label"]))
             trial.set_user_attr("selected_series", serie)
@@ -242,6 +261,7 @@ def run_optuna_threshold_search(
             attrs = dict(t.user_attrs)
             metrics = attrs.get("metrics", {}) if isinstance(attrs.get("metrics", {}), dict) else {}
             row = {
+                "prediction_scenario": attrs.get("prediction_scenario"),
                 "fund_key": fund_key,
                 "fund_label": str(FUND_CONFIG[fund_key]["label"]),
                 "trial_number": t.number,
@@ -289,19 +309,19 @@ def run_optuna_threshold_search(
             print(preview[[c for c in preview_cols if c in preview.columns]].to_string(index=False))
 
         fund_csv = OUTPUT_DIR / "reports" / (
-            f"optuna_threshold_trials_{fund_key}_{train_start}_{train_end}_eval_{eval_start}_{eval_end}.csv"
+            f"optuna_threshold_trials_{fund_key}_{train_start}_{train_end}_eval_{eval_start}_{eval_end}{report_tag}.csv"
         )
         pd.DataFrame(fund_rows_sorted).to_csv(fund_csv, index=False, encoding="utf-8")
         print(f"\nTrials del fondo guardados en: {fund_csv}")
 
     all_csv = OUTPUT_DIR / "reports" / (
-        f"optuna_threshold_trials_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}.csv"
+        f"optuna_threshold_trials_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}{report_tag}.csv"
     )
     best_csv = OUTPUT_DIR / "reports" / (
-        f"optuna_threshold_best_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}.csv"
+        f"optuna_threshold_best_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}{report_tag}.csv"
     )
     best_json = OUTPUT_DIR / "reports" / (
-        f"optuna_threshold_best_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}.json"
+        f"optuna_threshold_best_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}{report_tag}.json"
     )
 
     pd.DataFrame(all_trials_flat).to_csv(all_csv, index=False, encoding="utf-8")

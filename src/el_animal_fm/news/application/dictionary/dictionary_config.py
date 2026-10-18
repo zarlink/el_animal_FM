@@ -603,7 +603,6 @@ GEOPOLITICAL_HARD_EVENT_SEEDS = {
     "israel",
     "rusia",
     "ucrania",
-    "china",
     "guerra",
     "conflicto",
     "estrecho_de_ormuz",
@@ -614,7 +613,13 @@ GEOPOLITICAL_HARD_EVENT_SEEDS = {
     "tensión",
     "tensiones",
     "bloqueo",
-    "embargo",
+    "embargo económico"
+    "embargo economico"
+    "embargo comercial"
+    "embargo petrolero"
+    "embargo de armas"
+    "imponer un embargo"
+    "impuso un embargo"
     "alto al fuego",
     "misil",
     "misiles",
