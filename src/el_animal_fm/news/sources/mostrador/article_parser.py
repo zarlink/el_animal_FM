@@ -9,8 +9,8 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from dateutil import parser as date_parser
 from zoneinfo import ZoneInfo
+from el_animal_fm.news.infrastructure.article_integrity import publication_parts
 
 from el_animal_fm.news.domain.models import DiscoveredUrl
 from el_animal_fm.news.infrastructure import article_html
@@ -35,7 +35,6 @@ from el_animal_fm.news.sources.mostrador.config import (
     BASE_URL,
     ELMOSTRADOR_BOILERPLATE_PATTERNS,
     PARSER_VERSION,
-    SPANISH_MONTHS,
     TIMEZONE,
 )
 from el_animal_fm.news.sources.mostrador.discovery import (
@@ -90,52 +89,10 @@ def get_canonical_url(soup: BeautifulSoup, fallback_url: str) -> str:
 
 def parse_spanish_date(value: str) -> tuple[str, str, str, str]:
     raw = clean_text(value)
-
-    if not raw:
-        return "", "", "", ""
-
-    # Primero intentamos ISO/dateutil.
     try:
-        parsed = date_parser.parse(raw, fuzzy=True)
-        if not parsed.tzinfo:
-            parsed = parsed.replace(tzinfo=ZoneInfo(TIMEZONE))
-        return (
-            parsed.isoformat(),
-            parsed.date().isoformat(),
-            parsed.time().replace(microsecond=0).isoformat(),
-            raw,
-        )
-    except Exception:
-        pass
-
-    # Formato típico El Mostrador: 25 mayo, 2026
-    match = re.search(
-        r"(\d{1,2})\s+"
-        r"(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)"
-        r",?\s+"
-        r"(\d{4})"
-        r"(?:\s*[|,-]\s*(\d{1,2}:\d{2}))?",
-        raw,
-        flags=re.IGNORECASE,
-    )
-
-    if match:
-        day = int(match.group(1))
-        month = SPANISH_MONTHS[match.group(2).lower()]
-        year = int(match.group(3))
-        time_part = match.group(4) or "00:00"
-
-        hour, minute = [int(x) for x in time_part.split(":")]
-        parsed = datetime(year, month, day, hour, minute, tzinfo=ZoneInfo(TIMEZONE))
-
-        return (
-            parsed.isoformat(),
-            parsed.date().isoformat(),
-            parsed.time().replace(microsecond=0).isoformat(),
-            raw,
-        )
-
-    return "", "", "", raw
+        return (*publication_parts(raw), raw)
+    except (ValueError, TypeError):
+        return "", "", "", raw
 
 
 def get_published_data(soup: BeautifulSoup, article_ld: dict[str, Any]) -> tuple[str, str, str, str]:

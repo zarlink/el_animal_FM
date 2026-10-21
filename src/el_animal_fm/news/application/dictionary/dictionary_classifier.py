@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar
+from functools import lru_cache, wraps
 
 from el_animal_fm.news.application.dictionary.dictionary_config import (
     AMBIGUOUS_MARKET_SEEDS,
@@ -21,7 +23,45 @@ from el_animal_fm.news.application.dictionary.dictionary_config import (
     POLITICAL_RISK_SEEDS,
     SOCIAL_SECURITY_NOISE_SEEDS,
 )
-from el_animal_fm.news.application.dictionary.dictionary_text import clean
+from el_animal_fm.news.application.dictionary.dictionary_config import PHRASE_NORMALIZATIONS
+from el_animal_fm.news.application.dictionary.dictionary_text import clean as _clean
+
+
+# These dictionaries exist only for the duration of one classification. Never retain
+# whole article texts in a process-wide cache.
+_ARTICLE_MEMO: ContextVar[dict | None] = ContextVar("dictionary_article_memo", default=None)
+
+
+def clean(text: str) -> str:
+    memo = _ARTICLE_MEMO.get()
+    if memo is None:
+        return _clean(text)
+    cleaned = memo["clean"]
+    if text not in cleaned:
+        cleaned[text] = _clean(text)
+    return cleaned[text]
+
+
+def _per_article(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        token = _ARTICLE_MEMO.set({"clean": {}, "contains": {}, "hits": {}})
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _ARTICLE_MEMO.reset(token)
+    return wrapped
+
+
+@lru_cache(maxsize=4096)
+def _prepare_seed(seed: str, normalizations: tuple) -> tuple[str, re.Pattern | None]:
+    # The configuration is part of the key so edits also work in long-lived callers.
+    normalized = _clean(seed)
+    pattern = (
+        re.compile(rf"(?<![{WORD_CHARS}]){re.escape(normalized)}(?![{WORD_CHARS}])")
+        if normalized else None
+    )
+    return normalized, pattern
 
 
 def should_use_for_financial_dictionary(a: dict) -> bool:
@@ -72,13 +112,17 @@ def contains_seed(text: str, seed: str) -> bool:
     Evita matches accidentales dentro de otras palabras.
     """
     text = clean(text)
-    seed = clean(seed)
-
-    if not seed:
+    normalized, pattern = _prepare_seed(seed, tuple(PHRASE_NORMALIZATIONS.items()))
+    if pattern is None:
         return False
-
-    pattern = rf"(?<![{WORD_CHARS}]){re.escape(seed)}(?![{WORD_CHARS}])"
-    return re.search(pattern, text) is not None
+    memo = _ARTICLE_MEMO.get()
+    key = (text, normalized)
+    if memo is not None and key in memo["contains"]:
+        return memo["contains"][key]
+    found = pattern.search(text) is not None
+    if memo is not None:
+        memo["contains"][key] = found
+    return found
 
 
 def seed_hits(text: str, seeds: set[str]) -> set[str]:
@@ -88,15 +132,20 @@ def seed_hits(text: str, seeds: set[str]) -> set[str]:
     'eeuu', 'ee.uu.' y 'estados unidos'.
     """
     text = clean(text)
-
+    memo = _ARTICLE_MEMO.get()
+    key = (text, frozenset(seeds))
+    if memo is not None and key in memo["hits"]:
+        return set(memo["hits"][key])
     hits = set()
 
     for seed in seeds:
-        normalized_seed = clean(seed)
+        normalized_seed, _ = _prepare_seed(seed, tuple(PHRASE_NORMALIZATIONS.items()))
 
         if normalized_seed and contains_seed(text, seed):
             hits.add(normalized_seed)
 
+    if memo is not None:
+        memo["hits"][key] = frozenset(hits)
     return hits
 
 def has_market_context(text: str) -> bool:
@@ -231,6 +280,7 @@ def has_geopolitical_market_context(text: str) -> bool:
 
     return False
 
+@_per_article
 def classify_text_families(text: str) -> dict:
     """
     Clasifica un texto en familias temáticas útiles para diccionarios.

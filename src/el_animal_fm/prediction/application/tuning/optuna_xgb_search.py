@@ -10,6 +10,9 @@ import numpy as np
 import pandas as pd
 
 from el_animal_fm.prediction.application.features.dataset_builder import build_dataset_for_fund, get_feature_columns
+from el_animal_fm.prediction.application.features.decision_scenarios import (
+    scenario_options, scenario_label, scenario_report_tag, split_evaluable_dataset,
+)
 from el_animal_fm.prediction.application.xgboost.ml_dependencies import import_ml_dependencies, import_optuna_dependency
 from el_animal_fm.prediction.application.features.news_feature_builder import load_news_features
 from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG, RANDOM_SEED
@@ -36,8 +39,7 @@ def train_eval_for_xgb_trial(
     XGBClassifier = deps["XGBClassifier"]
 
     dataset = dataset.sort_index()
-    train_df = dataset[(dataset.index >= pd.Timestamp(train_start)) & (dataset.index <= pd.Timestamp(train_end))].copy()
-    eval_df = dataset[(dataset.index >= pd.Timestamp(eval_start)) & (dataset.index <= pd.Timestamp(eval_end))].copy()
+    train_df, eval_df = split_evaluable_dataset(dataset, train_start, train_end, eval_start, eval_end)
 
     if len(train_df) < 30 or len(eval_df) < 1:
         raise RuntimeError(f"Filas insuficientes: train={len(train_df)}, eval={len(eval_df)}")
@@ -88,6 +90,8 @@ def run_optuna_xgb_search(
     print("Los thresholds y decision_mode se toman desde FUND_MODEL_CONFIG salvo overrides CLI.")
 
     fund_runtime_configs = {fund_key: get_runtime_config_for_fund(fund_key, args) for fund_key in funds}
+    scenario_configs = {key: scenario_options(key, cfg) for key, cfg in fund_runtime_configs.items()}
+    report_tag = scenario_report_tag(list(scenario_configs.values()))
 
     news_start = train_start - timedelta(days=10)
     unique_news_configs = sorted({
@@ -133,9 +137,10 @@ def run_optuna_xgb_search(
             end=eval_end,
             news_df=news_df,
             target_threshold=target_threshold,
+            scenario=scenario_configs[fund_key],
         )
         dataset_suffix = (
-            f"optuna_xgb_dataset_{fund_key}_{decision_mode}"
+            f"optuna_xgb_dataset_{fund_key}_{scenario_label(decision_mode, scenario_configs[fund_key])}"
             f"_prob{probability_threshold:.3f}".replace(".", "p")
             + f"_target{target_threshold:.6f}".replace(".", "p")
             + f"_{train_start}_{eval_end}"
@@ -143,7 +148,7 @@ def run_optuna_xgb_search(
         ds_path = OUTPUT_DIR / "features" / f"{dataset_suffix}.csv"
         dataset.to_csv(ds_path, index_label="date", encoding="utf-8")
 
-        train_df = dataset[(dataset.index >= pd.Timestamp(train_start)) & (dataset.index <= pd.Timestamp(train_end))].copy()
+        train_df, _ = split_evaluable_dataset(dataset, train_start, train_end, eval_start, eval_end)
         positives = int(train_df["target_up"].astype(int).sum())
         negatives = int(len(train_df) - positives)
         if positives == 0 or negatives == 0:
@@ -172,6 +177,7 @@ def run_optuna_xgb_search(
             metrics = trial_result["metrics"]
             score = build_xgb_score(metrics, args.optuna_xgb_score)
 
+            trial.set_user_attr("prediction_scenario", scenario_configs[fund_key])
             trial.set_user_attr("fund_key", fund_key)
             trial.set_user_attr("fund_label", str(FUND_CONFIG[fund_key]["label"]))
             trial.set_user_attr("selected_series", serie)
@@ -205,6 +211,7 @@ def run_optuna_xgb_search(
             metrics = attrs.get("metrics", {}) if isinstance(attrs.get("metrics", {}), dict) else {}
             xgb_params = attrs.get("xgb_params", {}) if isinstance(attrs.get("xgb_params", {}), dict) else {}
             row = {
+                "prediction_scenario": scenario_configs[fund_key],
                 "fund_key": fund_key,
                 "fund_label": str(FUND_CONFIG[fund_key]["label"]),
                 "trial_number": t.number,
@@ -258,7 +265,7 @@ def run_optuna_xgb_search(
             print(preview[[c for c in preview_cols if c in preview.columns]].to_string(index=False))
 
         fund_csv = OUTPUT_DIR / "reports" / (
-            f"optuna_xgb_trials_{fund_key}_{train_start}_{train_end}_eval_{eval_start}_{eval_end}.csv"
+            f"optuna_xgb_trials_{fund_key}_{train_start}_{train_end}_eval_{eval_start}_{eval_end}{report_tag}.csv"
         )
         pd.DataFrame(fund_rows_sorted).to_csv(fund_csv, index=False, encoding="utf-8")
         print(f"\nTrials XGB del fondo guardados en: {fund_csv}")
@@ -288,13 +295,13 @@ def run_optuna_xgb_search(
             print(f"Modelo final del mejor trial guardado en: {final_result.model_path}")
 
     all_csv = OUTPUT_DIR / "reports" / (
-        f"optuna_xgb_trials_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}.csv"
+        f"optuna_xgb_trials_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}{report_tag}.csv"
     )
     best_csv = OUTPUT_DIR / "reports" / (
-        f"optuna_xgb_best_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}.csv"
+        f"optuna_xgb_best_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}{report_tag}.csv"
     )
     best_json = OUTPUT_DIR / "reports" / (
-        f"optuna_xgb_best_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}.json"
+        f"optuna_xgb_best_ALL_{train_start}_{train_end}_eval_{eval_start}_{eval_end}{report_tag}.json"
     )
 
     pd.DataFrame(all_trials_flat).to_csv(all_csv, index=False, encoding="utf-8")

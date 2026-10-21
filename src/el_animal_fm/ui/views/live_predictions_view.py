@@ -87,6 +87,7 @@ class LivePredictionsView(QWidget):
             "Versión del Diccionario Configurada": DEFAULT_DICTIONARY_VERSION,
             "Modelos Cargados": "Pendiente",
             "Fondos Analizados": "Pendiente",
+            "Fondos Pendientes": "Pendiente",
             "Señales en VIVO": "Pendiente",
         }
         status = SystemStatusPanel(rows=tuple(status_values))
@@ -134,6 +135,13 @@ class LivePredictionsView(QWidget):
     def apply_prediction(self, result: dict) -> None:
         day = date.fromisoformat(result["date"]).strftime("%d-%m-%Y")
         funds = result["funds"]
+        errors = result.get("errors", {})
+        for key, card in self._cards.items():
+            if key not in funds:
+                card.set_signal(
+                    metrics={name: "--" for name in ("pred_prob_up", "pred_up", "momentum_10", "vs_ma20", "drawdown_20", "entry_score")},
+                    semaforo="SIN SENAL", decision_if_out="Sin predicción", decision_if_in="Sin predicción")
+                card.setToolTip(errors.get(key, "Sin predicción para esta fecha."))
         for key, row in funds.items():
             metrics = {}
             for display, field in (("pred_prob_up", "pred_prob_up"), ("pred_up", "pred_up"),
@@ -146,11 +154,11 @@ class LivePredictionsView(QWidget):
             card.set_signal(metrics=metrics, semaforo=row["semaforo"],
                             decision_if_out=row["decision_if_out"].replace("_", " "),
                             decision_if_in=row["decision_if_in"].replace("_", " "))
-            card.setToolTip(f"{day} · Corte {result['cutoff']} · Serie {row['selected_series']}\nModelo: {row['model_path']}")
-        self._status.set_status({"Modelos Cargados": str(len(funds)), "Fondos Analizados": str(len(funds)),
+            card.setToolTip(f"{day} · {row['news_cutoff']} · {row['prediction_scenario']} · Serie {row['selected_series']}\nModelo: {row['model_path']}")
+        self._status.set_status({"Modelos Cargados": str(result["models_loaded"]), "Fondos Pendientes": str(len(errors)), "Fondos Analizados": str(len(funds)),
                                  "Señales en VIVO": str(len(funds))})
         counts = Counter(row["semaforo"].upper() for row in funds.values())
         self._signal_distribution.set_rows(tuple((key, str(count)) for key, count in counts.items()))
         scores = Counter(str(int(row["entry_score"])) for row in funds.values())
         self._entry_score.set_rows(tuple((score, str(count)) for score, count in sorted(scores.items())))
-        self._event_log.set_events((f"Predicción: {day} · noticias hasta {result['cutoff']} · {len(funds)} fondos.",))
+        self._event_log.set_events((f"Predicción: {day} · {len(funds)} fondos con señal · {len(errors)} pendientes.", *errors.values(),))

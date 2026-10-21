@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from el_animal_fm.prediction.application.features.dataset_builder import get_feature_columns
+from el_animal_fm.prediction.application.features.decision_scenarios import scenario_label, assert_model_scenario
 from el_animal_fm.prediction.application.xgboost.ml_dependencies import import_ml_dependencies
 from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
 from el_animal_fm.prediction.application.shared.prediction_utils import parse_user_time
@@ -20,9 +21,9 @@ def build_entry_semaforo(
     """Calcula semáforo técnico de entrada/permanencia.
 
     Semáforo estricto:
-    - verde: exige condiciones mínimas obligatorias, no solo puntaje.
+    - verde: modelo favorable y los tres filtros técnicos favorables.
     - amarillo: condiciones mixtas; no entrada nueva ideal, pero posible mantener si ya estás dentro.
-    - rojo: esperar fuera o evaluar salida/mover a defensivo.
+    - rojo: fallan los tres filtros técnicos, o modelo desfavorable y fallan al menos dos.
 
     Esta capa no reentrena XGBoost ni modifica pred_up. Solo agrega columnas
     operativas al CSV de predicciones para monitoreo y decisión manual.
@@ -54,30 +55,28 @@ def build_entry_semaforo(
         + out["semaforo_cond_drawdown_20"]
     )
 
-    # Regla estricta: el verde no se activa solo por puntaje.
-    # Debe cumplir condiciones mínimas de entrada técnica.
-    # Esto evita que un fondo marque "verde" con momentum_10 negativo,
-    # aunque reúna 4 puntos por las demás condiciones.
-    green_required = (
-        (out["pred_up"] == 1)
-        & (out["pred_prob_up"] >= probability_threshold)
-        & (out["momentum_10"] > 0)
-        & (out["valor_cuota_vs_ma20"] > 0)
-        & (out["drawdown_20"] > -0.04)
+    # El modelo aporta una sola señal, aunque pred_up y probabilidad se
+    # conservan como condiciones separadas en el score histórico (0 a 5).
+    # entry_score se mantiene para compatibilidad; no decide el color.
+    model_favorable = (
+        (out["semaforo_cond_pred_up"] == 1)
+        & (out["semaforo_cond_prob"] == 1)
+    )
+    technical_score = (
+        out["semaforo_cond_momentum_10"]
+        + out["semaforo_cond_valor_vs_ma20"]
+        + out["semaforo_cond_drawdown_20"]
+    )
+    green_required = model_favorable & (technical_score == 3)
+    red_required = (technical_score == 0) | (
+        ~model_favorable & (technical_score <= 1)
     )
 
     out["semaforo_green_required"] = green_required.astype(int)
-
     out["semaforo"] = np.select(
-        [
-            green_required & (out["entry_score"] >= 4),
-            out["entry_score"] >= 2,
-        ],
-        [
-            "verde",
-            "amarillo",
-        ],
-        default="rojo",
+        [green_required, red_required],
+        ["verde", "rojo"],
+        default="amarillo",
     )
 
     out["decision_if_out"] = np.where(
@@ -147,7 +146,9 @@ def build_prediction_output(
         "ma5_vs_ma20",
     ]
 
-    cols = [c for c in prediction_base_cols + semaforo_feature_cols if c in source_df.columns]
+    scenario_cols = ["decision_date", "quote_date", "quote_available_date", "news_reference_date",
+                     "withdrawal_start_date", "target_available_date", "prediction_scenario", "quote_age_calendar_days"]
+    cols = [c for c in prediction_base_cols + semaforo_feature_cols + scenario_cols if c in source_df.columns]
     predictions = source_df[cols].copy()
 
     # Asegura columnas base aunque sea señal live sin futuro conocido.
@@ -222,10 +223,11 @@ def predict_live_from_saved_model(
     joblib = deps["joblib"]
 
     cfg = FUND_CONFIG[fund_key]
-    horizon = int(cfg["horizon_business_days"])
+    options = dataset.attrs.get("prediction_scenario", {"name": "legacy"})
+    horizon = int(options.get("horizon_business_days", cfg["horizon_business_days"]))
     dataset = dataset.sort_index()
 
-    effective_mode_label = mode_label or decision_mode
+    effective_mode_label = scenario_label(mode_label or decision_mode, options)
     experiment_key = build_experiment_key(
         fund_key=fund_key,
         mode_label=effective_mode_label,
@@ -242,6 +244,12 @@ def predict_live_from_saved_model(
         )
 
     payload = joblib.load(model_path)
+    assert_model_scenario(payload, dataset)
+    if (payload.get("decision_mode") != decision_mode
+            or payload.get("decision_time") != decision_time_text
+            or payload.get("use_same_day_return_features") != use_same_day_return_features
+            or payload.get("selected_series") != selected_series):
+        raise ValueError("La modalidad, corte, variables o serie no coincide con el modelo guardado")
     model = payload["model"]
     feature_cols = list(payload.get("feature_cols", []))
     if not feature_cols:
@@ -260,6 +268,10 @@ def predict_live_from_saved_model(
         print(f"[WARN] Sin filas para señal live de {fund_key} entre {eval_start} y {eval_end}.")
         return None
 
+    if options.get("name") != "legacy":
+        missing = set(feature_cols) - set(live_df.columns)
+        if missing:
+            raise ValueError(f"Faltan variables del modelo: {sorted(missing)}")
     X_live = live_df.copy()
     for col in feature_cols:
         if col not in X_live.columns:

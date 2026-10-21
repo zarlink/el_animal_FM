@@ -3,9 +3,27 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG, FUND_MODEL_CONFIG, XGB_MODEL_CONFIG
+from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG, FUND_MODEL_CONFIG, XGB_MODEL_CONFIG, FUND_SCENARIO_CONFIG
 
-def get_runtime_config_for_fund(fund_key: str, args: argparse.Namespace) -> dict[str, Any]:
+
+def apply_scenario_config(fund_key, cfg, args, scenario):
+    name = scenario or getattr(args, "scenario", None) or FUND_CONFIG[fund_key].get("default_scenario", "legacy")
+    if name == "both":
+        raise ValueError("Selecciona un escenario concreto para construir la configuración")
+    if name != "legacy":
+        if not args.no_fund_presets:
+            cfg.update({"decision_mode": "same_day_close", "decision_time": None})
+            cfg.update(FUND_SCENARIO_CONFIG.get(fund_key, {}).get(name, {}))
+    cfg["scenario"] = name
+    for argument, key in (("quote_lag_days", "quote_lag_days"),
+                          ("withdrawal_days", "horizon_business_days"),
+                          ("business_holidays", "business_holidays")):
+        value = getattr(args, argument, None)
+        if value is not None:
+            cfg[key] = value
+    return cfg
+
+def get_runtime_config_for_fund(fund_key: str, args: argparse.Namespace, scenario: str | None = None) -> dict[str, Any]:
     if args.no_fund_presets:
         cfg = {
             "decision_mode": args.decision_mode,
@@ -18,14 +36,17 @@ def get_runtime_config_for_fund(fund_key: str, args: argparse.Namespace) -> dict
         }
         if not args.no_fund_xgb_config and fund_key in XGB_MODEL_CONFIG:
             cfg["xgb_params"] = XGB_MODEL_CONFIG[fund_key].copy()
-        return cfg
+        return apply_scenario_config(fund_key, cfg, args, scenario)
 
     cfg = FUND_MODEL_CONFIG.get(fund_key, {}).copy()
+    cfg = apply_scenario_config(fund_key, cfg, args, scenario)
 
     if not args.no_fund_xgb_config and fund_key in XGB_MODEL_CONFIG:
         # Se guarda dentro de la configuración runtime para que cada experimento
         # pueda usar hiperparámetros XGBoost específicos del fondo sin duplicar código.
-        cfg["xgb_params"] = XGB_MODEL_CONFIG[fund_key].copy()
+        cfg["xgb_params"] = {**XGB_MODEL_CONFIG[fund_key], **cfg.get("xgb_params", {})}
+    elif args.no_fund_xgb_config:
+        cfg.pop("xgb_params", None)
 
     # Overrides opcionales desde CLI. Si se dejan en None, se usa preset por fondo.
     if args.override_decision_mode is not None:
@@ -72,6 +93,10 @@ def normalize_fund_selection(selection: list[str] | None) -> list[str]:
 
 def print_fund_runtime_config(fund_key: str, cfg: dict[str, Any]) -> None:
     print("Parámetros del fondo:")
+    print(f"  scenario:                {cfg.get('scenario', 'legacy')}")
+    if cfg.get("scenario", "legacy") != "legacy":
+        print(f"  desfase CMF calendario:  {cfg.get('quote_lag_days', 1)} día(s)")
+        print(f"  retiro días hábiles:     {cfg.get('horizon_business_days', FUND_CONFIG[fund_key]['horizon_business_days'])}")
     print(f"  decision_mode:           {cfg['decision_mode']}")
     print(f"  decision_time:           {cfg.get('decision_time') or 'N/A'}")
     print(f"  target_threshold:        {cfg['target_threshold']}")

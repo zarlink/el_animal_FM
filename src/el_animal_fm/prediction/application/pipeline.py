@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+import copy
+import hashlib
 import random
 import warnings
 from dataclasses import asdict
 from datetime import timedelta
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from el_animal_fm.prediction.application.features.dataset_builder import build_dataset_for_fund
+from el_animal_fm.prediction.application.features.decision_scenarios import scenario_options, scenario_label
 from el_animal_fm.prediction.application.features.news_feature_builder import load_news_features
 from el_animal_fm.prediction.application.tuning.optuna_threshold_search import run_optuna_threshold_search
 from el_animal_fm.prediction.application.tuning.optuna_xgb_search import run_optuna_xgb_search
@@ -49,7 +53,7 @@ def main() -> None:
 
     funds = normalize_fund_selection(args.fund)
 
-    run_all_modes = not bool(args.single_preset_run)
+    run_all_modes = not bool(args.single_preset_run) and args.scenario in (None, "legacy")
 
     print("\nConfiguración general:")
     print(f"  Train: {train_start} a {train_end}")
@@ -63,74 +67,39 @@ def main() -> None:
     print(f"  Optuna XGB search: {bool(args.optuna_xgb_search)}")
 
     if args.optuna_xgb_search:
-        run_optuna_xgb_search(
-            funds=funds,
-            train_start=train_start,
-            train_end=train_end,
-            eval_start=eval_start,
-            eval_end=eval_end,
-            args=args,
-        )
+        for scenario in (["cmf_date_news", "decision_date_news"] if args.scenario == "both" else [args.scenario]):
+            search_args = copy.copy(args)
+            search_args.scenario = scenario
+            run_optuna_xgb_search(funds, train_start, train_end, eval_start, eval_end, search_args)
         return
 
     if args.optuna_threshold_search:
-        run_optuna_threshold_search(
-            funds=funds,
-            train_start=train_start,
-            train_end=train_end,
-            eval_start=eval_start,
-            eval_end=eval_end,
-            args=args,
-        )
+        for scenario in (["cmf_date_news", "decision_date_news"] if args.scenario == "both" else [args.scenario]):
+            search_args = copy.copy(args)
+            search_args.scenario = scenario
+            run_optuna_threshold_search(funds, train_start, train_end, eval_start, eval_end, search_args)
         return
 
-    # Configuración base por fondo: thresholds, target y retorno del mismo día.
-    # En modo multimodal se mantiene eso por fondo, pero se reemplaza decision_mode.
-    fund_runtime_configs: dict[str, dict[str, Any]] = {
-        fund_key: get_runtime_config_for_fund(fund_key, args)
-        for fund_key in funds
-    }
-
-    # Construye la grilla de experimentos.
-    experiments: list[dict[str, Any]] = []
-
-    if run_all_modes:
-        for fund_key in funds:
-            base_cfg = fund_runtime_configs[fund_key].copy()
-
-            for mode_cfg in DECISION_MODE_TESTS:
-                exp_cfg = base_cfg.copy()
-                exp_cfg["mode_label"] = str(mode_cfg["mode_label"])
-                exp_cfg["decision_mode"] = str(mode_cfg["decision_mode"])
-                exp_cfg["decision_time"] = mode_cfg.get("decision_time")
-
-                # Overrides globales opcionales siguen respetándose.
-                if args.override_probability_threshold is not None:
-                    exp_cfg["probability_threshold"] = args.override_probability_threshold
-                if args.override_target_threshold is not None:
-                    exp_cfg["target_threshold"] = args.override_target_threshold
-                if args.override_strict_return_lag is not None:
-                    exp_cfg["strict_return_lag"] = args.override_strict_return_lag
-                if args.tune:
-                    exp_cfg["tune"] = True
-                    exp_cfg["tune_iter"] = args.tune_iter
-
-                experiments.append(
-                    {
-                        "fund_key": fund_key,
-                        "config": exp_cfg,
-                    }
-                )
-    else:
-        for fund_key in funds:
-            exp_cfg = fund_runtime_configs[fund_key].copy()
-            exp_cfg["mode_label"] = str(exp_cfg["decision_mode"])
-            experiments.append(
-                {
-                    "fund_key": fund_key,
-                    "config": exp_cfg,
-                }
-            )
+    selected_scenarios = (["cmf_date_news", "decision_date_news"]
+                          if args.scenario == "both" else [args.scenario])
+    experiments = []
+    for fund_key in funds:
+        for scenario in selected_scenarios:
+            base_cfg = get_runtime_config_for_fund(fund_key, args, scenario=scenario)
+            modes = DECISION_MODE_TESTS if run_all_modes and base_cfg["scenario"] == "legacy" else [{
+                "mode_label": base_cfg["decision_mode"], "decision_mode": base_cfg["decision_mode"],
+                "decision_time": base_cfg.get("decision_time"),
+            }]
+            for mode_cfg in modes:
+                cfg = {**base_cfg, **mode_cfg}
+                options = scenario_options(fund_key, cfg)
+                cfg["mode_label"] = scenario_label(cfg["mode_label"], options)
+                experiments.append({"fund_key": fund_key, "config": cfg, "scenario": options})
+    selected_scenarios = list(dict.fromkeys(exp["config"]["scenario"] for exp in experiments))
+    run_tag = ""
+    if selected_scenarios != ["legacy"]:
+        signature = hashlib.sha256(json.dumps([exp["scenario"] for exp in experiments], sort_keys=True).encode()).hexdigest()[:12]
+        run_tag = "_" + "_".join(selected_scenarios) + "_" + signature
 
     print("\nExperimentos a ejecutar:")
     for exp in experiments:
@@ -201,6 +170,7 @@ def main() -> None:
                 end=eval_end,
                 news_df=news_df,
                 target_threshold=target_threshold,
+                scenario=exp["scenario"],
             )
 
             dataset_suffix = (
@@ -272,6 +242,7 @@ def main() -> None:
         if run_all_modes
         else f"resumen_xgboost_por_fondo_{train_start}_{train_end}_eval_{eval_start}_{eval_end}.json"
     )
+    summary_path = summary_path.with_name(summary_path.stem + run_tag + summary_path.suffix)
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # También guardamos una tabla plana CSV para análisis rápido en pandas/excel.
@@ -292,6 +263,7 @@ def main() -> None:
         else f"resumen_xgboost_por_fondo_{train_start}_{train_end}_eval_{eval_start}_{eval_end}.csv"
     )
 
+    flat_path = flat_path.with_name(flat_path.stem + run_tag + flat_path.suffix)
     if flat_rows:
         pd.DataFrame(flat_rows).to_csv(flat_path, index=False, encoding="utf-8")
     else:

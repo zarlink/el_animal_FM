@@ -9,6 +9,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
+from el_animal_fm.news.infrastructure.article_integrity import publication_parts
 
 from el_animal_fm.news.domain.discovery import merge_discoveries
 from el_animal_fm.news.domain.models import DiscoveredUrl
@@ -278,6 +279,7 @@ def parse_fetch_btn_config(
 
 def article_date_from_api_item(item: dict[str, Any]) -> date | None:
     candidates = [
+        str(item.get("post_URL", "")),
         str(item.get("post_date_date", "")),
         str(item.get("raw_post_date", "")),
         str(item.get("post_date", "")),
@@ -297,7 +299,7 @@ def article_date_from_api_item(item: dict[str, Any]) -> date | None:
             return date(year, month, day)
 
         try:
-            return date_parser.parse(candidate, fuzzy=True).date()
+            return date.fromisoformat(publication_parts(candidate)[1])
         except Exception:
             continue
 

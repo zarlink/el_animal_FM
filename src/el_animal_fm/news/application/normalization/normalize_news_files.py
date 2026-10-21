@@ -11,6 +11,8 @@ from el_animal_fm.news.application.shared.news_file_collection import (
     is_date_dir,
 )
 from el_animal_fm.news.application.normalization.news_normalizer import normalize_payload
+from el_animal_fm.news.infrastructure.article_integrity import prepare_daily_payload
+from el_animal_fm.news.infrastructure.dates import date_from_dir_name
 
 
 def read_payload(path: Path) -> dict[str, Any]:
@@ -45,7 +47,7 @@ def process_file(path: Path, overwrite: bool = True, *, output_name: str | None 
     try:
         payload = read_payload(path)
         ensure_backup(path)
-        normalized = normalize_payload(payload)
+        normalized = normalize_payload(prepare_daily_payload(payload, date_from_dir_name(path.parent.name)))
         output_path = build_output_path(path, overwrite=overwrite, output_name=output_name)
         write_payload(output_path, normalized)
     except Exception as exc:

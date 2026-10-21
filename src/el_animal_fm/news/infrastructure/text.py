@@ -45,6 +45,10 @@ def normalize_text(
 
     text = str(value)
     text = html_lib.unescape(text)
+    # URLs y rutas son identificadores, no prosa editorial. Aplicarles reglas
+    # como eliminar "destacados" o "publicidad" destruye la identidad del artículo.
+    if re.match(r"^(?:https?://|/)", text.strip()):
+        return text.strip()
     text = repair_mojibake(text)
 
     if boilerplate_remover:

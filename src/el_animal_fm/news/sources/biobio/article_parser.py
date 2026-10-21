@@ -9,7 +9,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from dateutil import parser as date_parser
+from el_animal_fm.news.infrastructure.article_integrity import publication_parts
 from zoneinfo import ZoneInfo
 
 from el_animal_fm.news.domain.models import DiscoveredUrl
@@ -107,11 +107,7 @@ def parse_datetime_value(value: str) -> tuple[str, str, str, str]:
         return "", "", "", ""
 
     try:
-        parsed = date_parser.parse(raw, fuzzy=True)
-        if not parsed.tzinfo:
-            parsed = parsed.replace(tzinfo=ZoneInfo(TIMEZONE))
-        iso = parsed.isoformat()
-        return iso, parsed.date().isoformat(), parsed.time().replace(microsecond=0).isoformat(), raw
+        return (*publication_parts(raw), raw)
     except Exception:
         return "", "", "", raw
 

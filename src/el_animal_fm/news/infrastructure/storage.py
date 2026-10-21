@@ -7,6 +7,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from el_animal_fm.news.infrastructure.dates import date_dir_name
+from el_animal_fm.news.infrastructure.article_integrity import article_key, prepare_daily_payload, assert_unique_daily_files
 
 
 TIMEZONE = "America/Santiago"
@@ -56,6 +57,9 @@ def get_article_url_from_payload(
     if not isinstance(article, dict):
         return ""
 
+    key = article_key(article)
+    if key:
+        return key
     raw = article.get("raw")
     if isinstance(raw, dict):
         return normalize_url(str(raw.get("canonical_url") or raw.get("url") or ""))
@@ -139,6 +143,8 @@ def write_output(
     }
 
     payload = payload_normalizer(payload)
+    payload = prepare_daily_payload(payload, target)
+    assert_unique_daily_files(list(output_path.parent.parent.glob("*/noticias_dia.txt")), (output_path, payload))
 
     output_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),

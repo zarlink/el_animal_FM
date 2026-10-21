@@ -111,7 +111,7 @@ class MainWindow(QMainWindow):
         self._prediction_result = None
         self._prediction_decoder.reset()
         self._header.set_predicting(True)
-        self.statusBar().showMessage("Generando predicciones con noticias hasta las 21:30…")
+        self.statusBar().showMessage("Generando predicciones con la configuración de cada fondo…")
         from el_animal_fm.prediction.infrastructure.output_paths import BASE_DIR
         environment = QProcessEnvironment.systemEnvironment()
         environment.insert("PYTHONPATH", str(BASE_DIR / "src") + os.pathsep + os.environ.get("PYTHONPATH", ""))
@@ -128,7 +128,9 @@ class MainWindow(QMainWindow):
                 try:
                     result = json.loads(line[len("[LIVE_RESULT] "):])
                     from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
-                    if set(result["funds"]) != set(FUND_CONFIG) or result["cutoff"] != "21:30":
+                    if (result.get("schema_version") != 2
+                            or set(result["funds"]) | set(result["errors"]) != set(FUND_CONFIG)
+                            or set(result["funds"]) & set(result["errors"])):
                         raise ValueError("Resultado incompleto")
                     date.fromisoformat(result["date"])
                     self._prediction_result = result
@@ -144,8 +146,10 @@ class MainWindow(QMainWindow):
             result = self._prediction_result
             self._live_view.apply_prediction(result)
             self._prediction_date = date.fromisoformat(result["date"])
-            self._header.set_date(self._prediction_date.strftime("%d-%m-%Y"), "Noticias hasta las 21:30")
-            self.statusBar().showMessage("Predicción terminada · corte de noticias 21:30.")
+            self._header.set_date(self._prediction_date.strftime("%d-%m-%Y"), "Corte de noticias según cada fondo")
+            self.statusBar().showMessage(
+                f"Predicción terminada · {len(result['funds'])} fondos con señal · "
+                f"{len(result['errors'])} pendientes. Revisar consola.")
         else:
             self.statusBar().showMessage("No se pudo completar la predicción. Revisa la consola de Análisis en Directo.")
 

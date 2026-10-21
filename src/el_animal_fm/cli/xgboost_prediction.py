@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from el_animal_fm.prediction.application.pipeline import main
+from el_animal_fm.prediction.application.config.prediction_config import FUND_CONFIG
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -23,6 +24,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decision-mode", choices=["strict_lag", "night_partial", "same_day_close"], default="strict_lag")
     parser.add_argument("--decision-time", default="21:30")
     parser.add_argument("--strict-return-lag", action="store_true")
+    parser.add_argument("--scenario", choices=["legacy", "cmf_date_news", "decision_date_news", "both"], default=None,
+                        help="Escenario operativo; both compara noticias de fecha CMF y de decisión. Sin opción usa el escenario predeterminado del fondo, o legacy.")
+    parser.add_argument("--quote-lag-days", type=int, default=None,
+                        help="Desfase supuesto de publicación CMF, en días calendario (default: 1).")
+    parser.add_argument("--withdrawal-days", type=int, default=None,
+                        help="Plazo de retiro en días hábiles desde el siguiente hábil a la decisión.")
+    parser.add_argument("--business-holidays", nargs="*", default=None,
+                        help="Lista completa de feriados ISO aplicables; reemplaza BUSINESS_HOLIDAYS.")
 
     # Nuevo comportamiento.
     parser.add_argument(
@@ -133,6 +142,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
+    if any(value is not None and value < 1 for value in (args.quote_lag_days, args.withdrawal_days)):
+        parser.error("El desfase CMF y el plazo de retiro deben ser positivos")
+    implicit_operational = args.scenario is None and bool(args.fund) and all(
+        FUND_CONFIG.get(key, {}).get("default_scenario", "legacy") != "legacy" for key in args.fund
+    )
+    if args.scenario in (None, "legacy") and not implicit_operational and any(value is not None for value in (args.quote_lag_days, args.withdrawal_days, args.business_holidays)):
+        parser.error("Las opciones operativas requieren --scenario cmf_date_news, decision_date_news o both")
 
     if args.override_strict_return_lag is not None:
         args.override_strict_return_lag = args.override_strict_return_lag.lower() == "true"
