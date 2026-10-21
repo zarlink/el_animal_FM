@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,6 +13,8 @@ from el_animal_fm.news.application.enrichment.enrichment_config import DEFAULT_I
 from el_animal_fm.news.application.enrichment.enrichment_dictionaries import TermEntry
 from el_animal_fm.news.application.shared.news_file_collection import find_news_files
 from el_animal_fm.news.application.enrichment.news_enrichment import enrich_article
+from el_animal_fm.news.infrastructure.article_integrity import prepare_daily_payload, assert_unique_daily_files
+from el_animal_fm.news.infrastructure.dates import date_from_dir_name
 
 
 def discover_news_files(
@@ -20,22 +23,33 @@ def discover_news_files(
     allowed_dates: set[date] | None = None,
     input_name: str = DEFAULT_INPUT_NAME,
 ) -> list[Path]:
-    return find_news_files(
+    files = find_news_files(
         base_dir,
         sources,
         file_names=(input_name,),
-        allowed_dates=allowed_dates,
+        allowed_dates=None,
     )
+    assert_unique_daily_files(files)
+    return [path for path in files if allowed_dates is None or date_from_dir_name(path.parent.name) in allowed_dates]
 
 
 def enrich_news_file(input_path: Path, compiled: dict[str, list[tuple[TermEntry, re.Pattern]]], dictionary_version: str, output_name: str, overwrite: bool = False) -> dict[str, Any]:
     output_path = input_path.parent / output_name
-    if output_path.exists() and not overwrite:
-        return {"input_path": str(input_path), "output_path": str(output_path), "status": "skipped_existing_output"}
     try:
         payload = json.loads(input_path.read_text(encoding="utf-8"))
+        payload = prepare_daily_payload(payload, date_from_dir_name(input_path.parent.name))
     except Exception as exc:
-        return {"input_path": str(input_path), "output_path": str(output_path), "status": "error", "error": f"json_load_error: {exc}"}
+        return {"input_path": str(input_path), "output_path": str(output_path), "status": "error", "error": f"input_validation_error: {exc}"}
+    fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    if output_path.exists() and not overwrite:
+        try:
+            existing = json.loads(output_path.read_text(encoding="utf-8"))
+            metadata = existing.get("metadata", {})
+            if (metadata.get("features_input_sha256") == fingerprint
+                    and prepare_daily_payload(existing, date_from_dir_name(input_path.parent.name)) == existing):
+                return {"input_path": str(input_path), "output_path": str(output_path), "status": "skipped_existing_output"}
+        except (ValueError, TypeError, KeyError):
+            pass  # Un derivado inválido o desactualizado se reconstruye del original.
     articles = payload.get("articles")
     if not isinstance(articles, list):
         return {"input_path": str(input_path), "output_path": str(output_path), "status": "error", "error": "missing_articles_list"}
@@ -45,6 +59,7 @@ def enrich_news_file(input_path: Path, compiled: dict[str, list[tuple[TermEntry,
     metadata["features_dictionary_version"] = dictionary_version
     metadata["features_generated_at"] = datetime.now().isoformat()
     metadata["features_articles_count"] = len(enriched_articles)
+    metadata["features_input_sha256"] = fingerprint
     output_payload = dict(payload)
     output_payload["metadata"] = metadata
     output_payload["articles"] = enriched_articles

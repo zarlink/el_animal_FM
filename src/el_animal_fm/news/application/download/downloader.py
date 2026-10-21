@@ -1,4 +1,5 @@
 from __future__ import annotations
+from el_animal_fm.news.infrastructure.article_integrity import article_key, correct_article
 
 import argparse
 import json
@@ -198,7 +199,7 @@ def scrape_single_day(
 
     urls = [
         url for url in urls_detected
-        if adapter.normalize_url(url) not in existing_urls
+        if article_key({"url": url}) not in existing_urls
     ]
 
     print()
@@ -252,7 +253,24 @@ def scrape_single_day(
                     print(f"[{completed}/{len(urls)}] ERROR: {url} | {exc}")
                     articles[index] = adapter.build_error_article(discoveries[url], exc)
 
-    new_articles = [article for article in articles if article is not None]
+    new_articles, rejected = [], []
+    for article in articles:
+        if article is None:
+            continue
+        try:
+            corrected, published = correct_article(article)
+            if published != target:
+                raise ValueError(f"Publicación {published} distinta del día solicitado {target}")
+            new_articles.append(corrected)
+        except ValueError as exc:
+            rejected.append({"article": article, "reason": str(exc)})
+    if rejected:
+        # Conservar evidencia fuera de los archivos que consumen normalización y modelos.
+        rejected_path = day_dir / "noticias_rechazadas_fecha.json"
+        previous = json.loads(rejected_path.read_text(encoding="utf-8")) if rejected_path.exists() else []
+        by_url = {article_key(item["article"]): item for item in previous + rejected}
+        rejected_path.write_text(json.dumps(list(by_url.values()), ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[WARN] {len(rejected)} noticias excluidas por fecha; evidencia: {rejected_path}")
     combined_articles = common_storage.deduplicate_articles_by_url(
         existing_articles + new_articles,
         normalize_url=adapter.normalize_url,
@@ -301,6 +319,7 @@ def scrape_single_day(
         "articles_found": len(discoveries),
         "articles_existing_before": len(existing_articles),
         "articles_new_downloaded": len(new_articles),
+        "articles_rejected_date": len(rejected),
         "articles_total_after_merge": len(combined_articles),
         "parse_success_new": successful_new,
         "parse_failed_new": failed_new,

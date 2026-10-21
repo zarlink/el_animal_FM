@@ -9,6 +9,7 @@ from el_animal_fm.news.application.normalization.normalize_news_files import (
     process_file,
 )
 from el_animal_fm.news.application.shared.news_file_collection import DEFAULT_NEWS_FILE_NAMES, find_news_files
+from el_animal_fm.news.infrastructure.article_integrity import assert_unique_daily_files
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
 
     file_names = (args.input_name,) if args.input_name else DEFAULT_NEWS_FILE_NAMES
     files = find_news_files(base_dir, args.media, file_names=file_names)
+    assert_unique_daily_files(files)
     global_total = len(files)
     global_ok = 0
     print(f"Archivos encontrados: {global_total}")

@@ -7,7 +7,7 @@ from el_animal_fm.prediction.application.config.prediction_config import FUND_CO
 
 
 def apply_scenario_config(fund_key, cfg, args, scenario):
-    name = scenario or getattr(args, "scenario", None) or "legacy"
+    name = scenario or getattr(args, "scenario", None) or FUND_CONFIG[fund_key].get("default_scenario", "legacy")
     if name == "both":
         raise ValueError("Selecciona un escenario concreto para construir la configuración")
     if name != "legacy":

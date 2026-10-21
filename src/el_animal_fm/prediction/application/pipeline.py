@@ -81,12 +81,12 @@ def main() -> None:
         return
 
     selected_scenarios = (["cmf_date_news", "decision_date_news"]
-                          if args.scenario == "both" else [args.scenario or "legacy"])
+                          if args.scenario == "both" else [args.scenario])
     experiments = []
     for fund_key in funds:
         for scenario in selected_scenarios:
             base_cfg = get_runtime_config_for_fund(fund_key, args, scenario=scenario)
-            modes = DECISION_MODE_TESTS if run_all_modes and scenario == "legacy" else [{
+            modes = DECISION_MODE_TESTS if run_all_modes and base_cfg["scenario"] == "legacy" else [{
                 "mode_label": base_cfg["decision_mode"], "decision_mode": base_cfg["decision_mode"],
                 "decision_time": base_cfg.get("decision_time"),
             }]
@@ -95,6 +95,7 @@ def main() -> None:
                 options = scenario_options(fund_key, cfg)
                 cfg["mode_label"] = scenario_label(cfg["mode_label"], options)
                 experiments.append({"fund_key": fund_key, "config": cfg, "scenario": options})
+    selected_scenarios = list(dict.fromkeys(exp["config"]["scenario"] for exp in experiments))
     run_tag = ""
     if selected_scenarios != ["legacy"]:
         signature = hashlib.sha256(json.dumps([exp["scenario"] for exp in experiments], sort_keys=True).encode()).hexdigest()[:12]

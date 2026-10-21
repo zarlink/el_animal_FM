@@ -156,9 +156,14 @@ def run_optuna_threshold_search(
         prob_min = args.optuna_prob_min if args.optuna_prob_min is not None else float(space["prob_min"])
         prob_max = args.optuna_prob_max if args.optuna_prob_max is not None else float(space["prob_max"])
 
-        available_modes = [m for m in requested_modes if m in set(space["modes"])]
+        # Explicit CLI modes override fund presets, just like numeric bounds.
+        # Keep trials within the modes whose news matrices were loaded above.
+        if not args.optuna_modes or "all" in args.optuna_modes:
+            available_modes = [m for m in requested_modes if m in set(space["modes"])]
+        else:
+            available_modes = list(requested_modes)
         if not available_modes:
-            available_modes = list(space["modes"])
+            raise ValueError(f"No hay modalidades válidas para {fund_key}")
 
         dataset_cache: dict[tuple[str, str, str | None, float], tuple[pd.DataFrame, str, Path]] = {}
 
