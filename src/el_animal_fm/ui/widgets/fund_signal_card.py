@@ -217,7 +217,7 @@ class FundSignalCard(QFrame):
                 "últimos 20 días."
             ),
             "entry_score": (
-                "Puntaje que resume las condiciones utilizadas para evaluar una posible entrada al fondo."
+                "Puntaje histórico de condiciones favorables (0 a 5). El color se decide por las reglas del modelo y los filtros técnicos, no por este puntaje."
             )
 
         }

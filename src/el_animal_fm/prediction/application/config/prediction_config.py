@@ -75,13 +75,6 @@ FUND_CONFIG: dict[str, dict[str, Any]] = {
         "horizon_business_days": 4,
         "preferred_series": ["SIMPLE", "APV", "IT"],
     },
-    "ahorro_uf_itau": {
-        "run_fm": "10243",
-        "folder": "10243_ahorro_uf_itau",
-        "label": "Ahorro UF Itaú",
-        "horizon_business_days": 1,
-        "preferred_series": ["SIMPLE", "APV", "F4", "F5", "IT"],
-    },
     "national_equity": {
         "run_fm": "8305",
         "folder": "8305_national_equity",
@@ -111,6 +104,13 @@ FUND_CONFIG: dict[str, dict[str, Any]] = {
         "label": "Toesca Equity - DIA",
         "horizon_business_days": 2,
         "preferred_series": ["F1", "SIMPLE", "APV", "IT"],
+    },
+    "ahorro_uf_itau": {
+        "run_fm": "10243",
+        "folder": "10243_ahorro_uf_itau",
+        "label": "Ahorro UF Itaú",
+        "horizon_business_days": 1,
+        "preferred_series": ["SIMPLE", "APV", "F4", "F5", "IT"],
     },
 }
 

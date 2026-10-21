@@ -21,9 +21,9 @@ def build_entry_semaforo(
     """Calcula semáforo técnico de entrada/permanencia.
 
     Semáforo estricto:
-    - verde: exige condiciones mínimas obligatorias, no solo puntaje.
+    - verde: modelo favorable y los tres filtros técnicos favorables.
     - amarillo: condiciones mixtas; no entrada nueva ideal, pero posible mantener si ya estás dentro.
-    - rojo: esperar fuera o evaluar salida/mover a defensivo.
+    - rojo: fallan los tres filtros técnicos, o modelo desfavorable y fallan al menos dos.
 
     Esta capa no reentrena XGBoost ni modifica pred_up. Solo agrega columnas
     operativas al CSV de predicciones para monitoreo y decisión manual.
@@ -55,30 +55,28 @@ def build_entry_semaforo(
         + out["semaforo_cond_drawdown_20"]
     )
 
-    # Regla estricta: el verde no se activa solo por puntaje.
-    # Debe cumplir condiciones mínimas de entrada técnica.
-    # Esto evita que un fondo marque "verde" con momentum_10 negativo,
-    # aunque reúna 4 puntos por las demás condiciones.
-    green_required = (
-        (out["pred_up"] == 1)
-        & (out["pred_prob_up"] >= probability_threshold)
-        & (out["momentum_10"] > 0)
-        & (out["valor_cuota_vs_ma20"] > 0)
-        & (out["drawdown_20"] > -0.04)
+    # El modelo aporta una sola señal, aunque pred_up y probabilidad se
+    # conservan como condiciones separadas en el score histórico (0 a 5).
+    # entry_score se mantiene para compatibilidad; no decide el color.
+    model_favorable = (
+        (out["semaforo_cond_pred_up"] == 1)
+        & (out["semaforo_cond_prob"] == 1)
+    )
+    technical_score = (
+        out["semaforo_cond_momentum_10"]
+        + out["semaforo_cond_valor_vs_ma20"]
+        + out["semaforo_cond_drawdown_20"]
+    )
+    green_required = model_favorable & (technical_score == 3)
+    red_required = (technical_score == 0) | (
+        ~model_favorable & (technical_score <= 1)
     )
 
     out["semaforo_green_required"] = green_required.astype(int)
-
     out["semaforo"] = np.select(
-        [
-            green_required & (out["entry_score"] >= 4),
-            out["entry_score"] >= 2,
-        ],
-        [
-            "verde",
-            "amarillo",
-        ],
-        default="rojo",
+        [green_required, red_required],
+        ["verde", "rojo"],
+        default="amarillo",
     )
 
     out["decision_if_out"] = np.where(

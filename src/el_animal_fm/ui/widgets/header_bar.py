@@ -23,7 +23,7 @@ class HeaderBar(QFrame):
 
         title = QLabel("EL ANIMAL - Centro de Decisiones")
         title.setObjectName("AppTitle")
-        subtitle = QLabel("Analisis Directo / Versión 0.7 (10202026)")
+        subtitle = QLabel("Analisis Directo / Versión 0.8 (10212026)")
         subtitle.setObjectName("AppSubtitle")
 
         title_layout.addWidget(title)
