@@ -1,8 +1,22 @@
 # El Animal FM: pipeline de noticias, fondos mutuos y prediccion con XGBoost
 
+![El Animal FM: pantalla del programa](EL%20ANIMAL%20SCREENSHOOT.jpg)
+
 Este proyecto construye una cadena completa para transformar noticias chilenas en variables cuantitativas y cruzarlas con series de fondos mutuos descargadas desde la CMF. La capa predictiva se ejecuta desde `09_xgboost_prediction.py`, pero su implementacion vive modularizada en `src/el_animal_fm/prediction/`: entrena modelos XGBoost por fondo, evalua distintas modalidades temporales de uso de noticias y genera senales operativas del tipo `mantener`, `mover_o_retirar`, `entrar`, `esperar` o `salir_o_mover_defensivo`.
 
 El flujo no parte en el modelo. Antes de llegar a XGBoost, los scripts anteriores descargan noticias, normalizan texto, unifican corpus, crean candidatos de diccionario, enriquecen cada noticia con features tematicas y descargan los datos financieros que sirven como variable objetivo.
+
+La versión funcional incluye un dashboard de escritorio para consultar las
+predicciones por fondo y perfil, revisar probabilidades e indicadores técnicos,
+y leer las acciones sugeridas según se esté dentro o fuera del fondo. Se inicia con:
+
+```bash
+python 11_dashboard.py
+```
+
+El análisis distingue tres resultados: superar el objetivo de retorno, cumplir
+los filtros técnicos del semáforo y mejorar frente a mantener. Son criterios
+diferentes; una clasificación favorable no demuestra por sí sola una ventaja económica.
 
 ---
 
@@ -27,6 +41,8 @@ El flujo no parte en el modelo. Antes de llegar a XGBoost, los scripts anteriore
   * [10.4 Features y modalidades](#104-features-y-modalidades)
   * [10.5 Entrenamiento, tuning y senales](#105-entrenamiento-tuning-y-senales)
   * [10.6 Salidas](#106-salidas)
+* [10.7 Análisis de fondos y validación](#107-análisis-de-fondos-y-validación)
+* [10.8 Dashboard y lectura de las tarjetas](#108-dashboard-y-lectura-de-las-tarjetas)
 * [11. Graficos de reportes XGBoost](#11-graficos-de-reportes-xgboost)
 * [12. Estructura de archivos](#12-estructura-de-archivos)
 * [13. Datos generados actualmente](#13-datos-generados-actualmente)
@@ -685,6 +701,9 @@ Por eso no basta con descargar noticias: hay que correr `06` antes de entrenar.
 
 | Fondo en `09` | RUN_FM | Carpeta esperada | Etiqueta | Horizonte |
 | --- | --- | --- | --- | --- |
+| `crecimiento_balanceado_dia` | `10063` | `10063_crecimiento_balanceado` | Crecimiento Balanceado, noticias del día | 4 dias habiles |
+| `national_equity_dia` | `8305` | `8305_national_equity` | National Equity, noticias del día | 2 dias habiles |
+| `toesca_equity_dia` | `9936` | `9936_toesca_equity` | Toesca Equity, noticias del día | 2 dias habiles |
 | `crecimiento_balanceado` | `10063` | `10063_crecimiento_balanceado` | Crecimiento Balanceado | 4 dias habiles |
 | `ahorro_uf_itau` | `10243` | `10243_ahorro_uf_itau` | Ahorro UF Itau | 1 dia habil |
 | `national_equity` | `8305` | `8305_national_equity` | National Equity | 2 dias habiles |
@@ -697,7 +716,25 @@ future_return_h = future_valor_cuota / valor_cuota - 1
 target_up = future_return_h > target_threshold
 ```
 
-Si `target_up = 1`, el modelo interpreta que el fondo supera el umbral definido para su horizonte. La senal operacional queda como `mantener`. Si `target_up = 0`, la senal queda como `mover_o_retirar`.
+`target_up` es la etiqueta real para entrenar y evaluar; no está disponible en
+una predicción futura. La señal del modelo se obtiene de
+`pred_up = (pred_prob_up >= probability_threshold)`: 1 genera `mantener` y 0,
+`mover_o_retirar`. La clase negativa incluye cualquier retorno que no supere el
+objetivo, incluso ganancias pequeñas si el objetivo es positivo.
+
+Los perfiles `_dia` comparten las series CMF del fondo original, con configuración
+y modelos identificados por separado. Usan `decision_date_news` por defecto:
+noticias del día de decisión y última cuota supuestamente disponible, con desfase
+de publicación de un día calendario. Crecimiento Balanceado y Toesca usan corte
+21:30; National Equity usa el día completo. Los perfiles originales conservan
+`legacy` como escenario predeterminado.
+
+En los escenarios nuevos el horizonte se cuenta después del día de decisión;
+el retorno parte de la última cuota conocida. `cmf_date_news` referencia las
+noticias a esa cuota y `decision_date_news` al día de decisión. No se usan cuotas
+futuras como variables ni etiquetas aún no publicadas al cierre del entrenamiento.
+La fecha objetivo debe existir exactamente. Detalles, comandos y límites en
+[Escenarios de predicción](docs/prediction_scenarios.md).
 
 #### Series CMF
 
@@ -795,6 +832,11 @@ participes_change_1d
 | `ahorro_uf_itau` | `night_partial` | `21:30` | `0.61` | `0.0000` |
 | `national_equity` | `same_day_close` | N/A | `0.516` | `0.000766` |
 | `toesca_equity` | `night_partial` | `21:30` | `0.35` | `0.00030` |
+
+Los perfiles `_dia` tienen entradas independientes en los presets; actualmente
+comparten los valores de probabilidad y objetivo de sus fondos originales. La
+configuración efectiva también depende del escenario y de los overrides CLI.
+Los presets son configuraciones operativas, no garantías de validación económica.
 
 `XGB_MODEL_CONFIG` tambien define hiperparametros por fondo: `n_estimators`, `learning_rate`, `max_depth`, `min_child_weight`, `gamma`, `subsample`, `colsample_bytree`, `reg_lambda` y `reg_alpha`.
 
@@ -977,9 +1019,26 @@ Regla:
 
 | Semaforo | Lectura |
 | --- | --- |
-| `verde` | Cumple prediccion, probabilidad y condiciones tecnicas minimas. |
-| `amarillo` | Condiciones mixtas; puede justificar mantener con alerta si ya se esta dentro. |
-| `rojo` | Esperar fuera o evaluar salida/mover a defensivo. |
+| `verde` | Modelo favorable y los tres filtros tecnicos favorables. Entrar/mantener. |
+| `amarillo` | Resto de combinaciones. Esperar fuera o mantener con alerta dentro. |
+| `rojo` | Fallan los tres filtros tecnicos, o modelo desfavorable y fallan al menos dos. Esperar fuera o evaluar salida/mover a defensivo. |
+
+El modelo es favorable cuando `pred_up == 1` y la probabilidad alcanza el umbral.
+Estas comprobaciones representan una sola señal para asignar el color.
+`entry_score` conserva su escala historica de 0 a 5 por compatibilidad, pero ya
+no determina el semaforo. La politica no implica rentabilidad validada.
+
+| Filtros técnicos favorables | Modelo favorable | Modelo desfavorable |
+| --- | --- | --- |
+| 3 | Verde | Amarillo |
+| 2 | Amarillo | Amarillo |
+| 1 | Amarillo | Rojo |
+| 0 | Rojo | Rojo |
+
+El rojo puede activarse aunque el modelo sea favorable si fallan los tres filtros
+técnicos. Momentum cero, cuota igual a su media y drawdown exactamente −4 % no
+cumplen sus respectivos filtros. La regla se aplica al generar predicciones;
+los CSV anteriores no se recalculan automáticamente.
 
 #### Metricas del reporte
 
@@ -990,11 +1049,11 @@ Cada experimento guarda metricas de clasificacion y de estrategia:
 | `accuracy` | Proporcion total de aciertos. |
 | `balanced_accuracy` | Accuracy balanceada entre clases. |
 | `precision_up` | Precision cuando el modelo predice mantener. |
-| `recall_up` | Cobertura de dias que realmente suben. |
+| `recall_up` | Cobertura de observaciones que realmente superan el objetivo. |
 | `f1_up` | Balance entre precision y recall de la clase positiva. |
 | `roc_auc` | Separacion probabilistica si hay ambas clases. |
-| `buy_hold_return_compounded` | Retorno acumulado manteniendo siempre. |
-| `strategy_return_compounded` | Retorno acumulado siguiendo la senal del modelo. |
+| `buy_hold_return_compounded` | Producto de retornos objetivo de todas las ventanas, con solapamientos. |
+| `strategy_return_compounded` | Producto de retornos de ventanas seleccionadas por el modelo; asigna cero a las demás. |
 | `strategy_improvement_vs_buy_hold` | Diferencia entre estrategia y buy & hold. |
 | `avg_future_return_when_pred_up` | Retorno futuro promedio cuando predice mantener. |
 | `avg_future_return_when_pred_down` | Retorno futuro promedio cuando predice mover/retiro. |
@@ -1005,8 +1064,74 @@ La matriz de confusion se interpreta asi:
 
 | Real / Prediccion | Predice mover/retiro | Predice mantener |
 | --- | --- | --- |
-| Real no sube o baja | Salida correcta (`TN`) | Mantener incorrecto (`FP`) |
-| Real sube | Salida incorrecta / oportunidad perdida (`FN`) | Mantener correcto (`TP`) |
+| Real no supera el objetivo | Salida correcta (`TN`) | Mantener incorrecto (`FP`) |
+| Real supera el objetivo | Salida incorrecta / oportunidad perdida (`FN`) | Mantener correcto (`TP`) |
+
+---
+
+### 10.7 Análisis de fondos y validación
+
+El análisis compara modelos, umbrales y escenarios por fondo, con énfasis en
+estabilidad mensual, separación de retornos y contraste frente a mantener.
+Conviene revisar conjuntamente la matriz de confusión, balanced accuracy, AUC,
+frecuencia de mantener/salir y retornos de ambos grupos. Un score alto o una
+probabilidad que supera el umbral no bastan para concluir que conviene ejecutar
+una salida o que existe protección ante caídas.
+
+Los diagnósticos documentados al 20/10/2026 muestran:
+
+| Fondo o perfil | Hallazgo | Consecuencia para el análisis |
+| --- | --- | --- |
+| National Equity | En la comparación mensual, el preset actual con probabilidad experimental 0.35 obtuvo balanced accuracy conjunta de 57.11 %, pero diferencia compuesta frente a mantener de −7.66 pp. | Mejor clasificación no implicó mejora económica; 0.35 no reemplaza al preset configurado 0.516 como valor definitivo. |
+| Crecimiento Balanceado `_dia` | Con objetivo experimental 0.000458 y probabilidad 0.2168, ninguno de los dos escenarios comparados superó a mantener en ningún corte mensual de junio a octubre evaluado. | La pequeña mejora de una búsqueda inicial no se sostuvo al reentrenar mensualmente; esos umbrales no se adoptaron. |
+| Toesca Equity y Ahorro UF Itaú | Tienen presets y flujo de predicción; los documentos citados no presentan una validación equivalente a las anteriores para estos fondos. | No extrapolarles los resultados de National Equity o Balanceado. |
+
+Estos resultados pertenecen a los experimentos indicados, no prueban la calidad
+de todos los modelos actuales. Los períodos usados para elegir parámetros no
+son validación independiente. Las ventanas objetivo se solapan y pueden incluir
+un tramo previo a la decisión por el atraso de la cuota: multiplicarlas no
+produce la rentabilidad realizable de una cartera. La evaluación operativa debe
+respetar disponibilidad de datos, fechas de ejecución y plazo de retiro.
+
+Los análisis también detectaron problemas de fechas y ubicación de noticias.
+La reparación del archivo está documentada, pero ese informe deja pendiente
+actualizar enriquecidos divergentes y reconstruir entradas XGB antes de repetir
+la comparación; no debe darse por resuelto ese paso solo por reparar el archivo.
+
+Documentos para reproducir y contextualizar los resultados:
+
+- [Comparación mensual de National Equity](docs/analisis_national_equity_comparacion_mensual_2026-10-20.md).
+- [Análisis de umbrales de National Equity](docs/analisis_national_equity_optuna_2026-10-20.md) y [análisis XGB](docs/analisis_national_equity_xgb_2026-10-20.md).
+- [Escenarios y resultados de Crecimiento Balanceado](docs/prediction_scenarios.md).
+- [Auditoría temporal de noticias](docs/auditoria_temporal_noticias_2026-10-20.md) y [reparación del archivo](docs/revision_integridad_noticias_2026-10-20.md).
+
+### 10.8 Dashboard y lectura de las tarjetas
+
+El dashboard se ejecuta con `python 11_dashboard.py` y permite consultar las
+predicciones de los fondos y perfiles configurados. La fecha automática es la
+última común con cuotas de todos los fondos y noticias enriquecidas de ambas
+fuentes; disponer de noticias más recientes no adelanta por sí solo esa fecha.
+
+Para cada perfil se busca un modelo entrenado antes del día de predicción y
+compatible con escenario, corte de noticias, umbrales, parámetros y serie.
+Los perfiles sin modelo compatible quedan pendientes, permitiendo mostrar los
+resultados de los demás. El detalle identifica el escenario, corte y archivo
+del modelo utilizado.
+
+Las tarjetas muestran la probabilidad de superar el objetivo, `pred_up`, momentum,
+posición respecto de la media de 20 períodos, drawdown, `entry_score` y semáforo.
+**IN y OUT describen la situación actual del usuario respecto del fondo**:
+
+| Color | OUT: si estás fuera | IN: si estás dentro |
+| --- | --- | --- |
+| Verde | Entrar | Mantener |
+| Amarillo | Esperar | Mantener con alerta |
+| Rojo | Esperar | Salir o mover a defensivo |
+
+OUT muestra `decision_if_out` e IN muestra `decision_if_in`. Las etiquetas no
+representan órdenes ejecutadas ni detectan automáticamente si existe una posición.
+El dashboard calcula las sugerencias con las reglas actuales del semáforo;
+`entry_score` es informativo y no decide el color.
 
 ---
 
@@ -1188,7 +1313,7 @@ Puntos criticos:
 * `same_day_close` puede ser util para benchmark, pero puede ser menos realista operacionalmente si se usa informacion que no estaba disponible al momento de decidir.
 * `night_partial` depende de que las noticias tengan hora de publicacion parseable.
 * El modelo XGBoost aprende correlaciones del periodo disponible. Con pocos datos o cambios de regimen, las metricas pueden variar fuertemente.
-* `strategy_return_compounded` asume seguir mecanicamente la senal y no incorpora costos, restricciones, impuestos, ventanas reales de rescate/suscripcion ni fricciones operativas.
+* `strategy_return_compounded` multiplica retornos de ventanas solapadas y no simula una cartera ejecutable; tampoco incorpora costos, impuestos ni fricciones de rescate/suscripcion.
 * El semaforo es una capa de lectura operativa, no una garantia de resultado.
 
 La forma recomendada de avanzar es mantener reportes por periodo, comparar modalidades, revisar importancias de variables, auditar predicciones puntuales y ampliar el historial antes de interpretar estabilidad del modelo.
